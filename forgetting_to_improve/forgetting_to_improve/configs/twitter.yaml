@@ -1,0 +1,31 @@
+experiment:
+  type: statistic
+  method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
+  objective: twitter
+  noise: [joint, epistemic]
+  # Twitter Flash Crash Dataset - DJIA prices on April 23, 2013
+  # A fake tweet about an explosion at the White House caused a brief market crash around 1:10 PM
+  # Original data: ~405 time points from 9:30 AM to 4:00 PM (390 minutes of trading)
+  # After normalization, the data is centered at 0 with std ~1
+  
+  # A_limits: Active learning region (focused around the flash crash event)
+  # The crash happened at approximately index 220 out of 405 points (around normalized time ~0)
+  # We focus on a window around the crash: roughly -1.5 to 1.5 in normalized time
+  # This corresponds to about +/- 60 minutes around the crash in real time
+  A_limits: [0.75, 1.25]
+  
+  # X_limits: Full trading day range (covers ~99.7% of normalized time data)
+  # The full normalized time range is approximately [-3, 3] (representing 9:30 AM to 4:00 PM)
+  X_limits: [-1.5, 1.5]
+  
+  num_samples: 405  # Use all available data points from the trading day
+  num_train_samples: 50  # Initial training samples (before crash detection)
+  num_A_samples: 80  # Dense sampling in the active region around the crash
+  seed: 100
+  fixed_kernel: false
+  show_plots: false  # Enable plots for 1D time series visualization
+  show_hessian: false
+  feature_subset: null  # Use the single time feature
+  kernel:
+    - type: rbf
+      length_scale: 0.1  # Relatively smooth for price data

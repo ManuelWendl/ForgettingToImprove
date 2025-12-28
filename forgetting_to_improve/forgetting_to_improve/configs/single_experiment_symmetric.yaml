@@ -1,0 +1,17 @@
+experiment:
+  type: single
+  method: sequential
+  objective: sin_symmetric_lengthscale_increase
+  noise: epistemic
+  A_limits: [-3, 3]
+  X_limits: [-10, 10]
+  num_samples: 1000
+  num_train_samples: 20
+  num_A_samples: 50
+  seed: 0
+  fixed_kernel: true
+  show_plots: true
+  show_hessian: false
+kernel_config:
+- type: 'rbf'
+  length_scale: 1.0

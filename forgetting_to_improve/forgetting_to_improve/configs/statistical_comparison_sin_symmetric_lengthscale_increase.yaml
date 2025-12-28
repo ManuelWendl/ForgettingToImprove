@@ -1,0 +1,17 @@
+experiment:
+  type: statistic
+  method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
+  objective: sin_symmetric_lengthscale_increase
+  noise: [joint, epistemic]
+  A_limits: [-3, 3]
+  X_limits: [-10, 10]
+  num_samples: 2000
+  num_train_samples: 20
+  num_A_samples: 50
+  seed: 100  # This means seeds 0-99 (100 seeds total)
+  fixed_kernel: false
+  show_plots: false
+  show_hessian: false
+  kernel:
+    - type: rbf
+      length_scale: 1.0

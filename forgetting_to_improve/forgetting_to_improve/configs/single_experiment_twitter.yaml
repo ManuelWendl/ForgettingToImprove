@@ -1,0 +1,17 @@
+experiment:
+  type: single
+  method: sequential
+  objective: twitter
+  noise: joint
+  A_limits: [0.75, 1.25]
+  X_limits: [-1.5, 1.5]
+  num_samples: 405
+  num_train_samples: 20
+  num_A_samples: 80
+  seed: 5
+  fixed_kernel: false
+  show_plots: true
+  show_hessian: false
+  kernel:
+  - type: 'rbf'
+    length_scale: 0.1

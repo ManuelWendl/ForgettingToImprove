@@ -1,0 +1,53 @@
+experiment:
+  type: statistic
+  method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
+  objective: boston
+  noise: [joint, epistemic]
+  # All 13 features of Boston Housing dataset (normalized scale with StandardScaler)
+  # Features: CRIM, ZN, INDUS, CHAS, NOX, RM, AGE, DIS, RAD, TAX, PTRATIO, B, LSTAT
+  # Normalized data centered at 0 with std ~1, so most values in [-3, 3]
+  # A_limits: Active learning region (central 40% of data: [-0.6, 0.6] for each feature)
+  A_limits: [
+    [-0.7, 0.4],  # CRIM - crime rate
+    [-0.7, 0.4],  # ZN - residential land zoning
+    [-0.7, 0.4],  # INDUS - non-retail business acres
+    [-0.7, 0.4],  # CHAS - Charles River dummy
+    [-0.7, 0.4],  # NOX - nitric oxides concentration
+    [-0.7, 0.4],  # RM - average rooms per dwelling
+    [-0.7, 0.4],  # AGE - proportion old units
+    [-0.7, 0.4],  # DIS - distance to employment centers
+    [-0.7, 0.4],  # RAD - highway accessibility index
+    [-0.7, 0.4],  # TAX - property tax rate
+    [-0.7, 0.4],  # PTRATIO - pupil-teacher ratio
+    [-0.7, 0.4],  # B - proportion of blacks
+    [-0.7, 0.4]   # LSTAT - % lower status population
+  ]
+  # X_limits: Full input space (covers ~99.7% of normalized data: [-3, 3] for each feature)
+  X_limits: [
+    [-15.0, 15.0],  # CRIM
+    [-15.0, 15.0],  # ZN
+    [-15.0, 15.0],  # INDUS
+    [-15.0, 15.0],  # CHAS
+    [-15.0, 15.0],  # NOX
+    [-15.0, 15.0],  # RM
+    [-15.0, 15.0],  # AGE
+    [-15.0, 15.0],  # DIS
+    [-15.0, 15.0],  # RAD
+    [-15.0, 15.0],  # TAX
+    [-15.0, 15.0],  # PTRATIO
+    [-15.0, 15.0],  # B
+    [-15.0, 15.0]   # LSTAT
+  ]
+  num_samples: 506  # Use all available data points
+  num_train_samples: 20
+  num_A_samples: 50
+  seed: 100
+  fixed_kernel: false
+  show_plots: false  # No plots for multidimensional
+  show_hessian: false
+  feature_subset: null  # Use all 13 features
+  kernel:
+    - type: rbf
+      length_scale: 1.0
+    - type: white
+      noise_level: 0.1

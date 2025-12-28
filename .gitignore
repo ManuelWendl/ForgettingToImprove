@@ -1,0 +1,6 @@
+*results/
+*figures/
+*/__pycache__/
+
+.venv/
+.vscode/
