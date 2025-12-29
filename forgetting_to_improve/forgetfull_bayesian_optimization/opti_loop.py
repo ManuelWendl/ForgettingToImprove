@@ -51,7 +51,7 @@ def get_optimization_loop(
             print(f"Using optimization algorithm: {algorithm} with method: {method}")
         
         for i in range(1, num_iters + 1):
-            if algorithm:
+            if algorithm == 'joint' or algorithm == 'epistemic':
                 target_region = TargetRegion(global_bounds, num_initial_points=num_target_region_samples)
                 filtered_x_samples, filtered_y_samples, _ = filter_samples(
                     model=model,
@@ -72,7 +72,7 @@ def get_optimization_loop(
                 print(f"Error fitting model at iteration {i}: {e}")
             aq = aq_func(model=model, X_baseline=train_x)
 
-            if algorithm:
+            if algorithm == 'joint' or algorithm == 'epistemic':
                 # update target region
                 bounds = target_region.get_bounds()
                 new_x = None
