@@ -237,7 +237,12 @@ def calculate_uncertainty_influence(
         K = kernel(x_samples, x_samples).evaluate()
     
     A = K + noise_level * torch.eye(len(x_samples), device=x_samples.device)
-    A_inv = torch.inverse(A)
+    try:
+        A_inv = torch.inverse(A)
+    except Exception as e:
+        print({e},' Added jitter')
+        A_inv = torch.inverse(A + 1e-4 * torch.eye(len(x_samples)))
+
     
     epistemic_influence, epistemic_uncertainty_marginal = (
         calculate_epistemic_uncertainty_influence(A_inv, model, x_samples, x_test)
