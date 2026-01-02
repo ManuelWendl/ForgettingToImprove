@@ -9,8 +9,7 @@ bayes_opt:
     kappa: 2.576
   save_results: true
   plot_results: true
-  results_path: results/botorch_ackley_2d_statistical.txt
-  plot_path: figures/
+  results_path: botorch_ackley_2d_statistical.txt
   sample_optimization:
     algorithm: [none, joint]
     method: sequential 

@@ -75,13 +75,14 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
 
     # Save results if requested
     if config.get('save_results', False):
-        results_path = config.get('results_path', 'results/experiment_results.txt')
+        results_path = config.get('results_path', 'experiment_results.txt')
+        results_path = 'forgetfull_bayesian_optimization/results/' + results_path
         print(f"\nSaving results to {results_path}...")
         save_results(results, config, results_path)
     
     # Plot results if requested
     if config.get('plot_results', False):
-        plot_path = config.get('plot_path', 'figures/')
+        plot_path = 'forgetfull_bayesian_optimization/figures/'
         print("\nCreating plots...")
         plot_results(results, config, plot_path)
     
