@@ -1,0 +1,21 @@
+bayes_opt:
+  type: comparative
+  objective: botorch_ackley_2d
+  n_seeds: 20
+  init_points: 10
+  n_iter: 100
+  acquisition: qUpperConfidenceBound
+  acquisition_params:
+    kappa: 2.576
+  save_results: true
+  plot_results: true
+  results_path: botorch_ackley_2d_statistical.txt
+  sample_optimization:
+    algorithm: [none, joint]
+    method: sequential 
+    min_samples: 5
+  kernel:
+    - type: matern
+      nu: 2.5
+      length_scale: 1.0             
+  alpha: 0.1
