@@ -23,7 +23,7 @@ def filter_samples(
                 except Exception as e:
                     print(f"Error fitting model at iteration {e}")
                 if target_region.samples.shape[0] > 5:
-                    target_region.update(model)
+                   target_region.update(model)
                 x_samples, y_samples, deleted_x_samples = sequentially_optimize_samples(
                     model=model,
                     likelihood=mll.likelihood,

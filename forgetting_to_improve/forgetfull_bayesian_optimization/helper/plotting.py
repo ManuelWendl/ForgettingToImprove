@@ -103,7 +103,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         method_color = colors['method_colors'][i % len(colors['method_colors'])]
         
         # Mean line
-        ax.semilogy(iterations, stats['simple_regret']['mean'], 
+        ax.plot(iterations, stats['simple_regret']['mean'], 
                    color=method_color, linewidth=2, label=f'{method.capitalize()}')
         
         # Std bands with light fill + hatching

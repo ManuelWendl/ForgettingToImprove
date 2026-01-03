@@ -38,7 +38,7 @@ def get_optimization_loop(
 
         train_x = draw_sobol_samples(
             bounds=global_bounds, n=n_initial_samples, q=1, seed=seed
-        ).squeeze(1)
+        ).squeeze(1).to(dtype=torch.float64)
         exact_obj = obj(train_x).unsqueeze(-1)  # add output dimension
 
         best_observed_value = exact_obj.max().item()
@@ -52,7 +52,7 @@ def get_optimization_loop(
         
         for i in range(1, num_iters + 1):
             if algorithm == 'joint' or algorithm == 'epistemic':
-                target_region = TargetRegion(global_bounds, num_initial_points=num_target_region_samples)
+                target_region = TargetRegion(global_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
                 filtered_x_samples, filtered_y_samples, _ = filter_samples(
                     model=model,
                     mll=mll,

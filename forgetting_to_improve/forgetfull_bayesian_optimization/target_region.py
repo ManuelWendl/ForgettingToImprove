@@ -5,21 +5,23 @@ from botorch.utils.sampling import draw_sobol_samples # type: ignore
 
 class TargetRegion:
     """Class representing the target region for Bayesian optimization."""
-    def __init__(self, global_bounds: torch.Tensor, num_initial_points: int = 1000):
+    def __init__(self, global_bounds: torch.Tensor, num_initial_points: int = 1000, seed: int = 0, iteration: int = 0):
         self.global_bounds = global_bounds
         self.num_initial_points = num_initial_points
         if global_bounds.shape[1] > 0:
             print("High-dimensional space detected. Using random sampling to estimate target region.")
+            # Use deterministic seed based on experiment seed and iteration to ensure reproducibility
+            deterministic_seed = seed * 100000 + iteration * 1000
             self.samples = draw_sobol_samples(
-                bounds=global_bounds, n=num_initial_points, q=1, seed=torch.randint(0, 10000, (1,)).item()
-            ).squeeze(1)
+                bounds=global_bounds, n=num_initial_points, q=1, seed=deterministic_seed
+            ).squeeze(1).to(dtype=torch.float64)
             # Expected distance between samples in high-dimensional space
             self.min_sample_distance = torch.mean(torch.norm(self.samples[1:] - self.samples[:-1], dim=1))
             self.initial_samples = self.samples.clone()
         else:
             samples_per_dim = int(num_initial_points ** (1 / global_bounds.shape[1]))
             linspaces = [
-                torch.linspace(global_bounds[0, d], global_bounds[1, d], samples_per_dim)
+                torch.linspace(global_bounds[0, d], global_bounds[1, d], samples_per_dim, dtype=torch.float64)
                 for d in range(global_bounds.shape[1])
             ]
             # Use a larger clustering distance - multiple grid cells

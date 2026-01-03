@@ -11,7 +11,8 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.kernels import MaternKernel, RBFKernel, ScaleKernel
 from gpytorch.kernels.kernel import AdditiveKernel
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.constraints import Interval
+from gpytorch.constraints import Interval, GreaterThan
+from gpytorch.priors import GammaPrior
 
 from .read_config import get_kernel_config
 
@@ -27,12 +28,12 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
         Tuple of (objective_function, bounds)
     """
     objective_map = {
-        'botorch_ackley_2d': (Ackley(dim=2, negate=True), torch.tensor([[-10.0] * 2, [30.0] * 2])),
-        'botorch_ackley_5d': (Ackley(dim=5, negate=True), torch.tensor([[0.0] * 5, [1.0] * 5])),
-        'botorch_branin': (Branin(negate=True), torch.tensor([[0.0, 0.0], [1.0, 1.0]])),
-        'botorch_hartmann_6d': (Hartmann(dim=6, negate=True), torch.tensor([[0.0] * 6, [1.0] * 6])),
-        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[0.0] * 2, [1.0] * 2])),
-        'botorch_levy_4d': (Levy(dim=4, negate=True), torch.tensor([[0.0] * 4, [1.0] * 4])),
+        'botorch_ackley_2d': (Ackley(dim=2, negate=True), torch.tensor([[-10.0] * 2, [30.0] * 2], dtype=torch.float64)),
+        'botorch_ackley_5d': (Ackley(dim=5, negate=True), torch.tensor([[-10.0] * 5, [30.0] * 5], dtype=torch.float64)),
+        'botorch_branin': (Branin(negate=True), torch.tensor([[-5.0, 10.0], [0.0, 15.0]], dtype=torch.float64)),
+        'botorch_hartmann_6d': (Hartmann(dim=6, negate=True), torch.tensor([[0.0] * 6, [1.0] * 6], dtype=torch.float64)),
+        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[0.0] * 2, [1.0] * 2], dtype=torch.float64)),
+        'botorch_levy_4d': (Levy(dim=4, negate=True), torch.tensor([[0.0] * 4, [1.0] * 4], dtype=torch.float64)),
     }
     
     if objective_name not in objective_map:
@@ -53,8 +54,18 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         GPyTorch kernel module
     """
     if not kernel_configs:
-        # Default: Matern 2.5 kernel
-        return ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=input_dim))
+        # Default: Matern 2.5 kernel with priors for stability
+        base_kernel = MaternKernel(
+            nu=2.5, 
+            ard_num_dims=input_dim,
+            lengthscale_prior=GammaPrior(3.0, 6.0),
+            lengthscale_constraint=GreaterThan(1e-4)
+        )
+        return ScaleKernel(
+            base_kernel,
+            outputscale_prior=GammaPrior(2.0, 0.15),
+            outputscale_constraint=GreaterThan(1e-4)
+        )
     
     kernels = []
     for kernel_config in kernel_configs:
@@ -63,17 +74,40 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         if kernel_type == 'matern':
             nu = kernel_config.get('nu', 2.5)
             length_scale = kernel_config.get('length_scale', 1.0)
-            kernel = MaternKernel(nu=nu, ard_num_dims=input_dim)
+            # Add prior and constraint to lengthscale for numerical stability
+            kernel = MaternKernel(
+                nu=nu, 
+                ard_num_dims=input_dim,
+                lengthscale_prior=GammaPrior(3.0, 6.0),
+                lengthscale_constraint=GreaterThan(1e-4)
+            )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            kernels.append(ScaleKernel(kernel))
+            # Add prior to outputscale
+            scale_kernel = ScaleKernel(
+                kernel,
+                outputscale_prior=GammaPrior(2.0, 0.15),
+                outputscale_constraint=GreaterThan(1e-4)
+            )
+            kernels.append(scale_kernel)
             
         elif kernel_type == 'rbf':
             length_scale = kernel_config.get('length_scale', 1.0)
-            kernel = RBFKernel(ard_num_dims=input_dim)
+            # Add prior and constraint to lengthscale for numerical stability
+            kernel = RBFKernel(
+                ard_num_dims=input_dim,
+                lengthscale_prior=GammaPrior(3.0, 6.0),
+                lengthscale_constraint=GreaterThan(1e-4)
+            )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            kernels.append(ScaleKernel(kernel))
+            # Add prior to outputscale
+            scale_kernel = ScaleKernel(
+                kernel,
+                outputscale_prior=GammaPrior(2.0, 0.15),
+                outputscale_constraint=GreaterThan(1e-4)
+            )
+            kernels.append(scale_kernel)
             
         elif kernel_type == 'white':
             # White noise kernel is handled via likelihood
@@ -87,7 +121,18 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
     elif len(kernels) > 1:
         return AdditiveKernel(*kernels)
     else:
-        return ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=input_dim))
+        # Fallback with priors
+        base_kernel = MaternKernel(
+            nu=2.5, 
+            ard_num_dims=input_dim,
+            lengthscale_prior=GammaPrior(3.0, 6.0),
+            lengthscale_constraint=GreaterThan(1e-4)
+        )
+        return ScaleKernel(
+            base_kernel,
+            outputscale_prior=GammaPrior(2.0, 0.15),
+            outputscale_constraint=GreaterThan(1e-4)
+        )
 
 
 def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor, 
@@ -110,12 +155,20 @@ def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor,
     # Create covariance module from config
     covar_module = create_kernel_from_config(kernel_configs, input_dim)
     
-    # Create likelihood with noise constraint
+    # Create likelihood with noise constraint and prior for stability
     noise_level = config.get('alpha', 0.0)
     if noise_level > 0:
-        likelihood = GaussianLikelihood(noise_constraint=Interval(0, noise_level * 10.0))
+        # Tighter constraint and prior for better conditioning
+        likelihood = GaussianLikelihood(
+            noise_prior=GammaPrior(1.1, 0.05),
+            noise_constraint=Interval(1e-6, noise_level * 10.0)
+        )
     else:
-        likelihood = GaussianLikelihood()
+        # Even for "noiseless" case, use small noise for numerical stability
+        likelihood = GaussianLikelihood(
+            noise_prior=GammaPrior(1.1, 0.05),
+            noise_constraint=Interval(1e-6, 1e-2)
+        )
     
     # Create model
     model = SingleTaskGP(
