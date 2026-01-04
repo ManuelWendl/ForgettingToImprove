@@ -9,19 +9,21 @@ class TargetRegion:
         self.global_bounds = global_bounds
         self.num_initial_points = num_initial_points
         if global_bounds.shape[1] > 0:
-            print("High-dimensional space detected. Using random sampling to estimate target region.")
-            # Use deterministic seed based on experiment seed and iteration to ensure reproducibility
-            deterministic_seed = seed * 100000 + iteration * 1000
+            deterministic_seed = seed * 10 + iteration
             self.samples = draw_sobol_samples(
                 bounds=global_bounds, n=num_initial_points, q=1, seed=deterministic_seed
             ).squeeze(1).to(dtype=torch.float64)
-            # Expected distance between samples in high-dimensional space
-            self.min_sample_distance = torch.mean(torch.norm(self.samples[1:] - self.samples[:-1], dim=1))
+            # Expected distance between samples based on volume and density
+            # Volume of the hypercube
+            domain_volume = torch.prod(global_bounds[1] - global_bounds[0])
+            # Expected distance: (volume / n_samples) ^ (1/d) scaled by dimensionality
+            d = global_bounds.shape[1]
+            self.min_sample_distance = (domain_volume / num_initial_points) ** (1.0 / d) * 2.0
             self.initial_samples = self.samples.clone()
         else:
             samples_per_dim = int(num_initial_points ** (1 / global_bounds.shape[1]))
             linspaces = [
-                torch.linspace(global_bounds[0, d], global_bounds[1, d], samples_per_dim, dtype=torch.float64)
+                torch.linspace(global_bounds[0, d], global_bounds[1, d], samples_per_dim)
                 for d in range(global_bounds.shape[1])
             ]
             # Use a larger clustering distance - multiple grid cells

@@ -37,15 +37,19 @@ def _get_color_palette():
         'region': 'lightgreen',        # Light green for region
         'contour': 'viridis',          # Colormap for contours
         'scatter': 'plasma',           # Colormap for scatter plots
-        'method_colors': [             # Colors for different methods
-            "#5F4690",  # Green
-            "#CC503E",  # Dark orange  
-            "#8B0000",  # Dark red
-            "#4B0082",  # Indigo
-            "#FF1493",  # Deep pink
-            "#008B8B",  # Dark cyan
-            "#9ACD32",  # Yellow green
-            "#FF4500",  # Orange red
+        'method_colors':  [
+            "#5F4690",
+            "#1D6996",
+            "#38A6A5",
+            "#0F8554",
+            "#73AF48",
+            "#EDAD08",
+            "#E17C05",
+            "#CC503E",
+            "#94346E",
+            "#6F4070",
+            "#994E95",
+            "#666666",
         ]
     }
 
@@ -104,7 +108,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         
         # Mean line
         ax.plot(iterations, stats['simple_regret']['mean'], 
-                   color=method_color, linewidth=2, label=f'{method.capitalize()}')
+                   color=method_color, linewidth=2, label=f'{method.capitalize() if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
         
         # Std bands with light fill + hatching
         mean_regret = stats['simple_regret']['mean']

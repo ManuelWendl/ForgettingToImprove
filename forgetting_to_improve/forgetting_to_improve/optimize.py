@@ -117,7 +117,6 @@ def sequentially_optimize_samples(
         model.train()
         likelihood.train()
     
-    print(f"Final number of samples: {len(x_samples)}")
     return x_samples, y_samples, deleted_x_samples
 
 

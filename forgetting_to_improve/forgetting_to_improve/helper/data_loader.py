@@ -88,7 +88,7 @@ def load_boston() -> Tuple[np.ndarray, np.ndarray]:
 
 
 def load_twitter() -> Tuple[np.ndarray, np.ndarray]:
-    """Load the Twitter flash crash dataset from botorch tutorials data.
+    """Load the Twitter flash crash dataset from botorch GitHub repository.
     
     This dataset contains Dow Jones Industrial Average (DJIA) prices on April 23, 2013,
     when a fake tweet about an explosion at the White House caused a brief market crash.
@@ -104,31 +104,15 @@ def load_twitter() -> Tuple[np.ndarray, np.ndarray]:
         print("Using cached Twitter flash crash dataset")
         return _DATASET_CACHE['twitter']
     
-    import os
-    
-    # Try to find the data file in the botorch tutorials folder
-    possible_paths = [
-        # Relative to current directory
-        "../botorch/tutorials/data/twitter_flash_crash.csv",
-        # Absolute path from workspace root
-        "/home/manuel/Cambridge/ForgettingToImproveBO/botorch/tutorials/data/twitter_flash_crash.csv",
-    ]
-    
-    data = None
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                print(f"Loading Twitter flash crash data from: {path}")
-                data = pd.read_csv(path, index_col=0)
-                break
-        except Exception as e:
-            print(f"Failed to load from {path}: {e}")
-            continue
-    
-    if data is None:
+    # Load from botorch GitHub repository (tutorials data not included in pip package)
+    try:
+        url = "https://raw.githubusercontent.com/pytorch/botorch/main/tutorials/data/twitter_flash_crash.csv"
+        print(f"Loading Twitter flash crash data from botorch GitHub: {url}")
+        data = pd.read_csv(url, index_col=0)
+    except Exception as e:
         raise FileNotFoundError(
-            "Could not find twitter_flash_crash.csv. "
-            "Please ensure the botorch tutorials data folder is available."
+            f"Could not load twitter_flash_crash.csv from GitHub: {e}. "
+            "Please check your internet connection."
         )
     
     # Convert timestamp to numeric (minutes since start)
