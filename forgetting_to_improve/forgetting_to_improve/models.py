@@ -1,5 +1,6 @@
 import torch
 import gpytorch
+from botorch.posteriors.gpytorch import GPyTorchPosterior
 
 
 class ExactGPModel(gpytorch.models.ExactGP):
@@ -72,6 +73,11 @@ class HeteroscedasticGPModel:
         
         self.mean_gp = self.mean_gp.to(device)
         self.noise_gp = self.noise_gp.to(device)
+        
+        # BoTorch compatibility attributes
+        self.num_outputs = 1
+        self._num_outputs = 1
+        self.covar_module = kernel  # Store reference to kernel for baseline initialization
     
     def fit(self, max_iter=50, lr=0.1):
         """
@@ -81,6 +87,12 @@ class HeteroscedasticGPModel:
             max_iter: Maximum number of iterations for alternating optimization
             lr: Learning rate for optimization
         """
+        # Ensure models are in training mode at start
+        self.mean_gp.train()
+        self.mean_likelihood.train()
+        self.noise_gp.train()
+        self.noise_likelihood.train()
+        
         for iteration in range(max_iter):
             # Step 1: Fit mean GP with current noise estimates
             self.mean_gp.train()
@@ -168,6 +180,44 @@ class HeteroscedasticGPModel:
     def __call__(self, x):
         """Forward pass returns the mean GP distribution."""
         return self.mean_gp(x)
+    
+    def posterior(self, X, observation_noise=False, posterior_transform=None, **kwargs):
+        """
+        Compute posterior distribution for BoTorch compatibility.
+        
+        Args:
+            X: Input tensor
+            observation_noise: Whether to include observation noise
+            posterior_transform: Optional posterior transform (for BoTorch compatibility)
+            **kwargs: Additional arguments for compatibility
+            
+        Returns:
+            GPyTorchPosterior wrapping the posterior distribution
+        """
+        self.mean_gp.eval()
+        self.noise_gp.eval()
+        
+        with torch.no_grad():
+            pred = self.mean_gp(X)
+            
+            if observation_noise:
+                # Include predicted heteroscedastic noise
+                noise_pred = self.noise_gp(X)
+                aleatoric_var = torch.exp(noise_pred.mean)
+                # Add aleatoric variance to the diagonal
+                pred_with_noise = gpytorch.distributions.MultivariateNormal(
+                    pred.mean,
+                    pred.covariance_matrix + torch.diag(aleatoric_var.flatten())
+                )
+                posterior_dist = GPyTorchPosterior(pred_with_noise)
+            else:
+                posterior_dist = GPyTorchPosterior(pred)
+            
+            # Apply posterior transform if provided
+            if posterior_transform is not None:
+                posterior_dist = posterior_transform(posterior_dist)
+            
+            return posterior_dist
     
     def train(self):
         """Set to training mode."""

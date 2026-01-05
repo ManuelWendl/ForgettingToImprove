@@ -2,7 +2,7 @@ experiment:
   type: single
   method: sequential
   objective: sin_symmetric_lengthscale_increase
-  noise: epistemic
+  noise: joint
   A_limits: [-3, 3]
   X_limits: [-10, 10]
   num_samples: 1000
