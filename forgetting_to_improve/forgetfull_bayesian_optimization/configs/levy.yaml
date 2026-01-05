@@ -11,7 +11,7 @@ bayes_opt:
   plot_results: true
   results_path: botorch_levy_4d_statistical.txt
   sample_optimization:
-    algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit]
+    algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
     method: sequential 
     min_samples: 5
   kernel:

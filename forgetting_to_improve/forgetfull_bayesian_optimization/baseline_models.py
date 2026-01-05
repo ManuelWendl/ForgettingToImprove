@@ -282,3 +282,99 @@ def initialize_heteroscedastic_gp_model(
     
     print("Heteroscedastic GP model fitted successfully")
     return None, hetero_model
+
+
+def initialize_modulating_surrogates_model(
+    train_x: torch.Tensor,
+    train_y: torch.Tensor,
+    kernel: Any = None,
+    noise_level: float = 0.1,
+    device: str = 'cpu'
+) -> Tuple[Any, Any]:
+    """
+    Initialize a Modulating Surrogates GP model.
+    
+    Based on "Modulating Surrogates for Bayesian Optimization" paper.
+    This method augments the input space with an additional dimension that has 
+    a uniform prior U[0,1]. During training, this dimension is sampled uniformly
+    for each data point, allowing the model to learn to down-weight detrimental samples.
+    
+    During acquisition optimization, this extra dimension is optimized jointly with
+    the original dimensions to find the optimal modulation value.
+    
+    Args:
+        train_x: Training inputs (n, d)
+        train_y: Training targets (n, 1) or (n,)
+        kernel: Matern kernel from config (same as standard GP uses)
+        noise_level: Noise level for the likelihood
+        device: Device for computation
+        
+    Returns:
+        Tuple of (mll, model)
+    """
+    if not BOTORCH_AVAILABLE:
+        raise ImportError("BoTorch is required for modulating_surrogates method")
+    
+    print("Initializing Modulating Surrogates model...")
+    
+    # Convert to double precision
+    train_x_double = train_x.double().to(device)
+    train_y_double = train_y.double().to(device)
+    
+    # Handle NaN/Inf
+    train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
+    train_y_double = torch.nan_to_num(train_y_double, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Ensure train_y has shape (n, 1)
+    if train_y_double.ndim == 1:
+        train_y_double = train_y_double.unsqueeze(-1)
+    
+    n_train, n_dims = train_x_double.shape
+    
+    # Augment training data with modulating dimension
+    # Sample uniformly from [0, 1] for each training point
+    modulating_dims = torch.rand(n_train, 1, dtype=torch.double, device=device)
+    train_x_augmented = torch.cat([train_x_double, modulating_dims], dim=-1)
+    
+    # Create Matern kernel with ARD for augmented space (d+1 dimensions)
+    base_kernel = gpytorch.kernels.MaternKernel(
+        nu=2.5, 
+        ard_num_dims=n_dims + 1,  # +1 for the modulating dimension
+        lengthscale_prior=GammaPrior(3.0, 1.5),
+        lengthscale_constraint=GreaterThan(1e-4)
+    ).double()
+    
+    kernel_modulating = gpytorch.kernels.ScaleKernel(
+        base_kernel,
+        outputscale_prior=GammaPrior(2.0, 0.15)
+    ).double()
+    
+    # Create likelihood with same noise constraints as standard GP
+    if noise_level > 0:
+        likelihood_modulating = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, noise_level * 10.0)
+        ).double()
+    else:
+        likelihood_modulating = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, 1e-2)
+        ).double()
+    
+    # Create SingleTaskGP with augmented inputs
+    modulating_model = SingleTaskGP(
+        train_X=train_x_augmented,
+        train_Y=train_y_double,
+        likelihood=likelihood_modulating,
+        covar_module=kernel_modulating
+    )
+    
+    # Fit the model
+    mll_modulating = ExactMarginalLogLikelihood(
+        likelihood=modulating_model.likelihood, 
+        model=modulating_model
+    )
+    fit_gpytorch_mll(mll_modulating)
+    
+    print("Modulating Surrogates model fitted successfully")
+    return mll_modulating, modulating_model
