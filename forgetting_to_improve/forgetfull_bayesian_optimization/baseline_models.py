@@ -1,9 +1,12 @@
 import torch
 import gpytorch
 import warnings
-from typing import Tuple, Any, Dict
+from typing import Tuple, Any
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.priors import GammaPrior
+from gpytorch.constraints import GreaterThan, Interval
+from gpytorch.likelihoods import GaussianLikelihood
 
 # Import baseline models from forgetting_to_improve
 from ..forgetting_to_improve.models import HeteroscedasticGPModel
@@ -135,10 +138,6 @@ def initialize_warped_gp_model(
         train_y_double = train_y_double.unsqueeze(-1)
     
     # Create fresh Matern kernel with same priors as standard GP (not pre-optimized)
-    import gpytorch
-    from gpytorch.priors import GammaPrior
-    from gpytorch.constraints import GreaterThan, Interval
-    from gpytorch.likelihoods import GaussianLikelihood
     
     n_dims = train_x_double.shape[-1]
     
@@ -237,16 +236,32 @@ def initialize_heteroscedastic_gp_model(
     if train_y.ndim > 1:
         train_y = train_y.squeeze(-1)
     
+    # Add priors to mean kernel if not already present
+    if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
+        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 1.5)
+        mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
+    if not hasattr(mean_kernel, 'outputscale_prior'):
+        mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
+    
     # Create noise kernel if not provided
     if noise_kernel is None:
         n_dims = train_x.shape[-1]
         if n_dims == 1:
             noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel()
+                gpytorch.kernels.RBFKernel(
+                    lengthscale_prior=GammaPrior(3.0, 1.5),
+                    lengthscale_constraint=GreaterThan(1e-4)
+                ),
+                outputscale_prior=GammaPrior(2.0, 0.15)
             ).to(device)
         else:
             noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(ard_num_dims=n_dims)
+                gpytorch.kernels.RBFKernel(
+                    ard_num_dims=n_dims,
+                    lengthscale_prior=GammaPrior(3.0, 1.5),
+                    lengthscale_constraint=GreaterThan(1e-4)
+                ),
+                outputscale_prior=GammaPrior(2.0, 0.15)
             ).to(device)
     
     # Create heteroscedastic model
@@ -258,8 +273,12 @@ def initialize_heteroscedastic_gp_model(
         device=device
     )
     
-    # Fit the model
+    # Fit the model (this will set it to eval mode at the end)
     hetero_model.fit(max_iter=50, lr=0.1)
+    
+    # Set to training mode for acquisition function optimization
+    # This allows gradients to flow during acqf optimization
+    hetero_model.train()
     
     print("Heteroscedastic GP model fitted successfully")
     return None, hetero_model
