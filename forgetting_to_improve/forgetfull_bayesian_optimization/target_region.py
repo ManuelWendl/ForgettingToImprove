@@ -82,8 +82,8 @@ class TargetRegion:
         # Compute bounding boxes for each cluster
         all_bounds = []
         for cluster in clusters:
-            min_bounds = torch.min(cluster, dim=0).values
-            max_bounds = torch.max(cluster, dim=0).values
+            min_bounds = torch.min(cluster, dim=0).values - self.min_sample_distance / 2.0
+            max_bounds = torch.max(cluster, dim=0).values + self.min_sample_distance / 2.0
             all_bounds.append((min_bounds, max_bounds))
 
         print(f"Target region clustering took {time.time() - t0:.2f} seconds for {len(clusters)} clusters.")

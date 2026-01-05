@@ -137,7 +137,8 @@ def initialize_warped_gp_model(
     # Create fresh Matern kernel with same priors as standard GP (not pre-optimized)
     import gpytorch
     from gpytorch.priors import GammaPrior
-    from gpytorch.constraints import GreaterThan
+    from gpytorch.constraints import GreaterThan, Interval
+    from gpytorch.likelihoods import GaussianLikelihood
     
     n_dims = train_x_double.shape[-1]
     
@@ -145,15 +146,26 @@ def initialize_warped_gp_model(
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
         ard_num_dims=n_dims,
-        lengthscale_prior=GammaPrior(3.0, 6.0),
+        lengthscale_prior=GammaPrior(3.0, 1.5),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
     
     kernel_warped = gpytorch.kernels.ScaleKernel(
         base_kernel,
-        outputscale_prior=GammaPrior(2.0, 0.15),
-        outputscale_constraint=GreaterThan(1e-4)
+        outputscale_prior=GammaPrior(2.0, 0.15)
     ).double()
+    
+    # Create likelihood with EXACT same noise constraints as standard GP
+    if noise_level > 0:
+        likelihood_warped = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, noise_level * 10.0)
+        ).double()
+    else:
+        likelihood_warped = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, 1e-2)
+        ).double()
     
     # Determine bounds for input warping
     n_dims = train_x_double.shape[-1]
@@ -179,10 +191,11 @@ def initialize_warped_gp_model(
         bounds=bounds_warp
     )
     
-    # Create warped GP model with Matern kernel, let it learn noise from data
+    # Create warped GP model with Matern kernel and SAME likelihood constraints as standard GP
     warped_model = SingleTaskGP(
         train_X=train_x_double,
         train_Y=train_y_double,
+        likelihood=likelihood_warped,
         covar_module=kernel_warped,
         input_transform=warp_tf
     )

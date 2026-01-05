@@ -12,7 +12,7 @@ from gpytorch.kernels import MaternKernel, RBFKernel, ScaleKernel
 from gpytorch.kernels.kernel import AdditiveKernel
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval, GreaterThan
-from gpytorch.priors import GammaPrior
+from gpytorch.priors import GammaPrior, UniformPrior
 
 from .read_config import get_kernel_config
 
@@ -54,17 +54,16 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         GPyTorch kernel module
     """
     if not kernel_configs:
-        # Default: Matern 2.5 kernel with priors for stability
+        # Default: Matern 2.5 kernel with priors for unnormalized inputs
         base_kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
-            lengthscale_prior=GammaPrior(3.0, 6.0),
+            lengthscale_prior=GammaPrior(3.0, 1.5),
             lengthscale_constraint=GreaterThan(1e-4)
         )
         return ScaleKernel(
             base_kernel,
-            outputscale_prior=GammaPrior(2.0, 0.15),
-            outputscale_constraint=GreaterThan(1e-4)
+            outputscale_prior=GammaPrior(2.0, 0.15)
         )
     
     kernels = []
@@ -78,16 +77,14 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             kernel = MaternKernel(
                 nu=nu, 
                 ard_num_dims=input_dim,
-                lengthscale_prior=GammaPrior(3.0, 6.0),
+                lengthscale_prior=GammaPrior(3.0, 1.5),
                 lengthscale_constraint=GreaterThan(1e-4)
             )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            # Add prior to outputscale
             scale_kernel = ScaleKernel(
                 kernel,
-                outputscale_prior=GammaPrior(2.0, 0.15),
-                outputscale_constraint=GreaterThan(1e-4)
+                outputscale_prior=GammaPrior(2.0, 0.15)
             )
             kernels.append(scale_kernel)
             
@@ -96,16 +93,14 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             # Add prior and constraint to lengthscale for numerical stability
             kernel = RBFKernel(
                 ard_num_dims=input_dim,
-                lengthscale_prior=GammaPrior(3.0, 6.0),
+                lengthscale_prior=GammaPrior(3.0, 1.5),
                 lengthscale_constraint=GreaterThan(1e-4)
             )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            # Add prior to outputscale
             scale_kernel = ScaleKernel(
                 kernel,
-                outputscale_prior=GammaPrior(2.0, 0.15),
-                outputscale_constraint=GreaterThan(1e-4)
+                outputscale_prior=GammaPrior(2.0, 0.15)
             )
             kernels.append(scale_kernel)
             
@@ -121,17 +116,16 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
     elif len(kernels) > 1:
         return AdditiveKernel(*kernels)
     else:
-        # Fallback with priors
+        # Fallback with priors for unnormalized inputs
         base_kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
-            lengthscale_prior=GammaPrior(3.0, 6.0),
+            lengthscale_prior=GammaPrior(3.0, 1.5),
             lengthscale_constraint=GreaterThan(1e-4)
         )
         return ScaleKernel(
             base_kernel,
-            outputscale_prior=GammaPrior(2.0, 0.15),
-            outputscale_constraint=GreaterThan(1e-4)
+            outputscale_prior=GammaPrior(2.0, 0.15)
         )
 
 
@@ -158,9 +152,9 @@ def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor,
     # Create likelihood with noise constraint and prior for stability
     noise_level = config.get('alpha', 0.0)
     if noise_level > 0:
-        # Tighter constraint and prior for better conditioning
+        # More flexible prior for better adaptation
         likelihood = GaussianLikelihood(
-            noise_prior=GammaPrior(1.1, 0.05),
+            noise_prior=GammaPrior(1.1, 0.05),  # More flexible: mean=1.5, std=1.22
             noise_constraint=Interval(1e-6, noise_level * 10.0)
         )
     else:
