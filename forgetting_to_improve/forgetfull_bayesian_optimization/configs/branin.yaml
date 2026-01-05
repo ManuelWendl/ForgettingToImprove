@@ -1,9 +1,9 @@
 bayes_opt:
   type: comparative
   objective: botorch_branin
-  n_seeds: 20
+  n_seeds: 10
   init_points: 10
-  n_iter: 25
+  n_iter: 50
   acquisition: qUpperConfidenceBound
   acquisition_params:
     kappa: 2.576
