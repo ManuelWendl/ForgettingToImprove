@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Tuple
 import numpy as np
 from pathlib import Path
+import json
+import pickle
 
 
 def save_results(results: Dict[str, Any], config: Dict[str, Any], results_path: str) -> None:
@@ -68,6 +70,81 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any], results_path: 
             # Find best method by mean simple regret
             best_method = min(results.items(), key=lambda x: x[1]['simple_regret']['mean'][-1])
             f.write(f"\nBest method: {best_method[0].upper()}\n")
+
+
+def save_learning_history(results: Dict[str, Any], config: Dict[str, Any], results_path: str) -> None:
+    """
+    Save complete learning history for later plotting without re-running experiments.
+    
+    Saves two files:
+    - .pkl file: Complete Python object with all data
+    - .json file: Human-readable format with arrays converted to lists
+    
+    Args:
+        results: Results dictionary with method names as keys and statistics as values
+        config: Configuration dictionary
+        results_path: Base path to save results (without extension)
+    """
+    Path(results_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Remove extension if present
+    base_path = str(results_path).replace('.txt', '').replace('.pkl', '').replace('.json', '')
+    
+    # Create data structure for saving
+    data = {
+        'config': config,
+        'results': results
+    }
+    
+    # Save as pickle (most efficient, preserves numpy arrays)
+    pickle_path = base_path + '_history.pkl'
+    with open(pickle_path, 'wb') as f:
+        pickle.dump(data, f)
+    print(f"Learning history saved to {pickle_path}")
+    
+    # Save as JSON (human-readable, for inspection)
+    json_path = base_path + '_history.json'
+    json_data = {
+        'config': config,
+        'results': {}
+    }
+    
+    # Convert numpy arrays to lists for JSON serialization
+    for method_name, stats in results.items():
+        json_data['results'][method_name] = {}
+        for metric_name, metric_stats in stats.items():
+            json_data['results'][method_name][metric_name] = {}
+            for stat_type, values in metric_stats.items():
+                if isinstance(values, np.ndarray):
+                    json_data['results'][method_name][metric_name][stat_type] = values.tolist()
+                else:
+                    json_data['results'][method_name][metric_name][stat_type] = values
+    
+    with open(json_path, 'w') as f:
+        json.dump(json_data, f, indent=2)
+    print(f"Learning history (JSON) saved to {json_path}")
+
+
+def load_learning_history(results_path: str) -> Dict[str, Any]:
+    """
+    Load learning history from saved pickle file.
+    
+    Args:
+        results_path: Path to the .pkl file (with or without extension)
+        
+    Returns:
+        Dictionary containing config and results
+    """
+    # Add extension if not present
+    if not results_path.endswith('.pkl'):
+        results_path = results_path.replace('.txt', '').replace('.json', '') + '_history.pkl'
+    
+    with open(results_path, 'rb') as f:
+        data = pickle.load(f)
+    
+    return data
+
+
 
 
 def compute_statistics(all_results: List[List[float]], optimal_value: float) -> Dict[str, Any]:

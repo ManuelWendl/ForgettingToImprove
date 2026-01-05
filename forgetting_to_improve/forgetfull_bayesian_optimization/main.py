@@ -3,7 +3,7 @@ import argparse
 from .helper.read_config import read_config, get_acquisition_config, get_optimization_config, validate_config
 from .run_experiment import run_experiment
 from .helper.plotting import plot_results
-from .helper.result_writer import save_results, compute_statistics
+from .helper.result_writer import save_results, save_learning_history, compute_statistics
 from .helper.setup_experiment import get_objective_function, get_acquisition_function, initialize_model_with_config
 
 def run_bayesian_optimization_experiment(config_path: str) -> None:
@@ -79,6 +79,8 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
         results_path = 'forgetting_to_improve/forgetfull_bayesian_optimization/results/' + results_path
         print(f"\nSaving results to {results_path}...")
         save_results(results, config, results_path)
+        # Save complete learning history for plotting
+        save_learning_history(results, config, results_path)
     
     # Plot results if requested
     if config.get('plot_results', False):

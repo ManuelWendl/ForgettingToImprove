@@ -108,7 +108,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         
         # Mean line
         ax.plot(iterations, stats['simple_regret']['mean'], 
-                   color=method_color, linewidth=2, label=f'{method.capitalize() if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
+                   color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
         
         # Std bands with light fill + hatching
         mean_regret = stats['simple_regret']['mean']
@@ -118,13 +118,13 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         ax.fill_between(iterations, 
                         mean_regret - std_regret, 
                         mean_regret + std_regret, 
-                        facecolor=method_color, alpha=0.15, 
+                        facecolor=method_color, alpha=0.2, 
                         linewidth=0, edgecolor='none')
         # Hatching overlay
         ax.fill_between(iterations, 
                         mean_regret - std_regret, 
                         mean_regret + std_regret, 
-                        facecolor='none', hatch='//////', 
+                        facecolor='none', 
                         linewidth=0, edgecolor=method_color)
     
     ax.set_xlabel('Iteration')
@@ -147,19 +147,19 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         std_cumulative = stats['cumulative_regret']['std']
         
         ax.plot(iterations, mean_cumulative, 
-               color=method_color, linewidth=2, label=f'{method.capitalize()}')
+               color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
         
         # Std bands with light fill + hatching
         ax.fill_between(iterations,
                         mean_cumulative - std_cumulative,
                         mean_cumulative + std_cumulative,
-                        facecolor=method_color, alpha=0.15, 
-                        linewidth=1, edgecolor='none')
+                        facecolor=method_color, alpha=0.2, 
+                        linewidth=0, edgecolor='none')
         ax.fill_between(iterations,
                         mean_cumulative - std_cumulative,
                         mean_cumulative + std_cumulative,
-                        facecolor='none', hatch='//////', 
-                        linewidth=1, edgecolor=method_color)
+                        facecolor='none', 
+                        linewidth=0, edgecolor=method_color)
     
     ax.set_xlabel('Iteration')
     ax.set_ylabel('Cumulative Regret')
@@ -181,18 +181,18 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         std_best = stats['best_values']['std']
         
         ax.plot(iterations, mean_best, 
-               color=method_color, linewidth=2, label=f'{method.capitalize()}')
+               color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
         
         # Std bands with light fill + hatching
         ax.fill_between(iterations,
                         mean_best - std_best,
                         mean_best + std_best,
-                        facecolor=method_color, alpha=0.15, 
+                        facecolor=method_color, alpha=0.2, 
                         linewidth=0, edgecolor='none')
         ax.fill_between(iterations,
                         mean_best - std_best,
                         mean_best + std_best,
-                        facecolor='none', hatch='//////', 
+                        facecolor='none', 
                         linewidth=0, edgecolor=method_color)
     
     ax.set_xlabel('Iteration')
