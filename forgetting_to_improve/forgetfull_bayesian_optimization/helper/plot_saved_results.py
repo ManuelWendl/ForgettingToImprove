@@ -2,7 +2,7 @@
 Script to load and plot saved learning histories without re-running experiments.
 
 Usage:
-    python -m forgetting_to_improve.helper.forgetfull_bayesian_optimization.plot_saved_results -f results/experiment_results.txt -o costum_figure_folder/
+    python -m forgetting_to_improve.forgetfull_bayesian_optimization.helper.plot_saved_results -f ./forgetting_to_improve/forgetfull_bayesian_optimization/results/botorch_ackley_2d_statistical.txt -o custom_figure_folder/
 """
 
 import argparse

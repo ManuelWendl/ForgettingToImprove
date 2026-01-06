@@ -1,7 +1,7 @@
 import torch
 from typing import Dict, Any, Callable, Tuple, List
 from botorch.models import SingleTaskGP
-from botorch.test_functions import Ackley, Branin, Hartmann, Rosenbrock, Levy, Beale, HolderTable
+from botorch.test_functions import Ackley, Branin, Rosenbrock, Levy, Beale, HolderTable, Griewank
 from botorch.acquisition import (
     qUpperConfidenceBound, 
     qLogExpectedImprovement, 
@@ -29,10 +29,10 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
     """
     objective_map = {
         'botorch_ackley_2d': (Ackley(dim=2, negate=True), torch.tensor([[-10.0] * 2, [30.0] * 2], dtype=torch.float64)),
-        'botorch_ackley_5d': (Ackley(dim=5, negate=True), torch.tensor([[-10.0] * 5, [30.0] * 5], dtype=torch.float64)),
+        'botorch_ackley_6d': (Ackley(dim=6, negate=True), torch.tensor([[-10.0] * 6, [30.0] * 6], dtype=torch.float64)),
         'botorch_branin': (Branin(negate=True), torch.tensor([[-5.0, 10.0], [0.0, 15.0]], dtype=torch.float64)),
-        'botorch_hartmann_6d': (Hartmann(dim=6, negate=True), torch.tensor([[0.0] * 6, [1.0] * 6], dtype=torch.float64)),
-        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[0.0] * 2, [1.0] * 2], dtype=torch.float64)),
+        'botorch_griewank': (Griewank(negate=True), torch.tensor([[-30.0] * 2, [20.0] * 2], dtype=torch.float64)),
+        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[-5.0] * 2, [10.0] * 2], dtype=torch.float64)),
         'botorch_levy_4d': (Levy(dim=4, negate=True), torch.tensor([[0.0] * 4, [1.0] * 4], dtype=torch.float64)),
         'botorch_beal': (Beale(negate=True), torch.tensor([[-4.5] * 2, [4.5] * 2], dtype=torch.float64)),
         'botorch_holder_table': (HolderTable(negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64))
