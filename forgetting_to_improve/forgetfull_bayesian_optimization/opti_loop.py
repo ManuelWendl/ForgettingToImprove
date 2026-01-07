@@ -1,5 +1,6 @@
 import torch
 import warnings
+import gpytorch
 from botorch import fit_gpytorch_mll
 from botorch.utils.sampling import draw_sobol_samples
 from .opti_aquisition import get_optimize_acqf_and_get_observation
@@ -11,6 +12,7 @@ from .baseline_models import (
     initialize_heteroscedastic_gp_model,
     initialize_modulating_surrogates_model
 )
+from .mc_acquisition import create_mc_latent_acquisition
 
 
 def get_optimization_loop(
@@ -86,7 +88,6 @@ def get_optimization_loop(
             
             elif algorithm == 'heteroscedastic_gp':
                 # Create fresh kernel for each iteration
-                import gpytorch
                 n_dims = train_x.shape[-1]
                 fresh_kernel = gpytorch.kernels.ScaleKernel(
                     gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=n_dims)
@@ -152,11 +153,18 @@ def get_optimization_loop(
             
             # Create acquisition function
             if algorithm == 'modulating_surrogates':
-                # For modulating surrogates, augment X_baseline with random modulating values
-                n_train = train_x.shape[0]
-                modulating_dims = torch.rand(n_train, 1, dtype=train_x.dtype, device=train_x.device)
-                train_x_augmented = torch.cat([train_x, modulating_dims], dim=-1)
-                aq = aq_func(model=model, X_baseline=train_x_augmented)
+                # For modulating surrogates (Latent GP), use Monte Carlo acquisition
+                # Average acquisition function over posterior samples of latent variables
+                try:
+                    aq = create_mc_latent_acquisition(
+                        acq_func_factory=aq_func,
+                        latent_gp_model=model,
+                        X_baseline=train_x,  # Original dimension, no augmentation needed
+                        num_samples=None  # Use all MCMC samples
+                    )
+                except Exception as e:
+                    print(f"Warning: Failed to create MC acquisition ({e}), using standard acquisition")
+                    aq = aq_func(model=model, X_baseline=train_x)
             else:
                 aq = aq_func(model=model, X_baseline=train_x)
 
@@ -176,15 +184,9 @@ def get_optimization_loop(
                         new_x = candidate_x
                         new_acqvalue = candidate_acqvalue
             elif algorithm == 'modulating_surrogates':
-                # For modulating surrogates, optimize over augmented space
-                # Augment global bounds with [0, 1] for the modulating dimension
-                augmented_bounds = torch.cat([
-                    global_bounds,
-                    torch.tensor([[0.0], [1.0]], dtype=global_bounds.dtype, device=global_bounds.device)
-                ], dim=1)
-                new_x_aug, new_acqvalue = optimize_acqf_and_get_observation(aq, augmented_bounds)
-                # Remove the modulating dimension from the candidate for objective evaluation
-                new_x = new_x_aug[:, :-1]
+                # For modulating surrogates (Latent GP), optimize in original space only
+                # The latent variables are marginalized out via Monte Carlo in the acquisition function
+                new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, global_bounds)
             else:
                 # Use global bounds for baseline methods or no algorithm
                 new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, global_bounds)

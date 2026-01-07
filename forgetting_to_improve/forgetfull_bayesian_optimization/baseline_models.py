@@ -274,18 +274,22 @@ def initialize_modulating_surrogates_model(
     train_y: torch.Tensor,
     kernel: Any = None,
     noise_level: float = 0.1,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    num_mcmc_samples: int = 100,
+    num_warmup: int = 100
 ) -> Tuple[Any, Any]:
     """
-    Initialize a Modulating Surrogates GP model.
+    Initialize a Modulating Surrogates GP model using Latent GP (LGP).
     
     Based on "Modulating Surrogates for Bayesian Optimization" paper.
-    This method augments the input space with an additional dimension that has 
-    a uniform prior U[0,1]. During training, this dimension is sampled uniformly
-    for each data point, allowing the model to learn to down-weight detrimental samples.
     
-    During acquisition optimization, this extra dimension is optimized jointly with
-    the original dimensions to find the optimal modulation value.
+    This implements the proper LGP approach where:
+    1. Each training point has latent variables h_n ~ N(0, σ²_h I)
+    2. Posterior inference over H and θ is performed via MCMC (HMC/NUTS)
+    3. Acquisition function uses Monte Carlo approximation over posterior samples
+    
+    The latent variables allow the model to learn which training points are
+    unreliable/detrimental and down-weight them automatically.
     
     Args:
         train_x: Training inputs (n, d)
@@ -293,18 +297,22 @@ def initialize_modulating_surrogates_model(
         kernel: Matern kernel from config (same as standard GP uses)
         noise_level: Noise level for the likelihood
         device: Device for computation
+        num_mcmc_samples: Number of MCMC posterior samples to draw
+        num_warmup: Number of MCMC warmup/burn-in steps
         
     Returns:
-        Tuple of (mll, model)
+        Tuple of (None, model) - mll is None as MCMC handles inference
     """
     if not BOTORCH_AVAILABLE:
         raise ImportError("BoTorch is required for modulating_surrogates method")
     
-    print("Initializing Modulating Surrogates model...")
+    from ..forgetting_to_improve.models import create_latent_gp_model, LatentGPModel
+    
+    print("Initializing Latent GP (Modulating Surrogates) model...")
     
     # Convert to double precision
-    train_x_double = train_x.double()
-    train_y_double = train_y.double()
+    train_x_double = train_x.double().to(device)
+    train_y_double = train_y.double().to(device)
     
     # Handle NaN/Inf
     train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
@@ -316,15 +324,11 @@ def initialize_modulating_surrogates_model(
     
     n_train, n_dims = train_x_double.shape
     
-    # Augment training data with modulating dimension
-    # Sample uniformly from [0, 1] for each training point
-    modulating_dims = torch.rand(n_train, 1, dtype=torch.double)
-    train_x_augmented = torch.cat([train_x_double, modulating_dims], dim=-1)
-    
-    # Create Matern kernel with ARD for augmented space (d+1 dimensions)
+    # Create Matern kernel with ARD for augmented space (d + latent_dim dimensions)
+    latent_dim = 1  # One latent variable per training point
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
-        ard_num_dims=n_dims + 1,  # +1 for the modulating dimension
+        ard_num_dims=n_dims + latent_dim,  # +latent_dim for the latent variables
         lengthscale_prior=GammaPrior(3.0, 1.5),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
@@ -346,20 +350,40 @@ def initialize_modulating_surrogates_model(
             noise_constraint=Interval(1e-6, 1e-2)
         ).double()
     
-    # Create SingleTaskGP with augmented inputs
-    modulating_model = SingleTaskGP(
-        train_X=train_x_augmented,
-        train_Y=train_y_double,
-        likelihood=likelihood_modulating,
-        covar_module=kernel_modulating
-    )
+    # Create Latent GP model with MCMC
+    # Prior std for latent variables (σ_h in the paper)
+    sigma_h = 1.0
     
-    # Fit the model
-    mll_modulating = ExactMarginalLogLikelihood(
-        likelihood=modulating_model.likelihood, 
-        model=modulating_model
-    )
-    fit_gpytorch_mll(mll_modulating)
+    try:
+        modulating_model = create_latent_gp_model(
+            train_x=train_x_double,
+            train_y=train_y_double,
+            covar_module=kernel_modulating,
+            likelihood=likelihood_modulating,
+            latent_dim=latent_dim,
+            sigma_h=sigma_h,
+            num_mcmc_samples=num_mcmc_samples,
+            num_warmup=num_warmup
+        )
+        print("Latent GP (Modulating Surrogates) model fitted successfully via MCMC")
+    except Exception as e:
+        print(f"Warning: MCMC failed ({e}). Falling back to simplified version...")
+        # Fallback to simpler approach without full MCMC
+        modulating_model = LatentGPModel(
+            train_X=train_x_double,
+            train_Y=train_y_double,
+            covar_module=kernel_modulating,
+            likelihood=likelihood_modulating,
+            latent_dim=latent_dim,
+            sigma_h=sigma_h,
+            num_mcmc_samples=100,  # Single sample (MAP estimate)
+            num_warmup=100
+        )
+        # Use zero latent variables as fallback
+        modulating_model.mcmc_samples_h = torch.zeros(
+            1, n_train, latent_dim,
+            dtype=train_x_double.dtype,
+            device=train_x_double.device
+        )
     
-    print("Modulating Surrogates model fitted successfully")
-    return mll_modulating, modulating_model
+    return None, modulating_model
