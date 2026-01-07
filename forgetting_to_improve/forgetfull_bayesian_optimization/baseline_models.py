@@ -215,19 +215,23 @@ def initialize_heteroscedastic_gp_model(
     device: str = 'cpu'
 ) -> Tuple[None, HeteroscedasticGPModel]:
     """
-    Initialize a Heteroscedastic GP model.
+    Initialize a Most Likely Heteroscedastic GP model.
+    
+    This implements the algorithm from:
+    "Most Likely Heteroscedastic Gaussian Process Regression"
+    http://people.csail.mit.edu/kersting/papers/kersting07icml_mlHetGP.pdf
     
     Args:
         train_x: Training inputs (n, d)
         train_y: Training targets (n, 1) or (n,)
         mean_kernel: Kernel for the mean GP
-        noise_kernel: Kernel for the noise GP (optional)
+        noise_kernel: Not used (kept for compatibility)
         device: Device for computation
         
     Returns:
         Tuple of (None, model) - mll is None as it's managed internally
     """
-    print("Initializing Heteroscedastic GP model...")
+    print("Initializing Most Likely Heteroscedastic GP model...")
     
     train_x = train_x.to(device)
     train_y = train_y.to(device)
@@ -243,44 +247,25 @@ def initialize_heteroscedastic_gp_model(
     if not hasattr(mean_kernel, 'outputscale_prior'):
         mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
     
-    # Create noise kernel if not provided
-    if noise_kernel is None:
-        n_dims = train_x.shape[-1]
-        if n_dims == 1:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(
-                    lengthscale_prior=GammaPrior(3.0, 1.5),
-                    lengthscale_constraint=GreaterThan(1e-4)
-                ),
-                outputscale_prior=GammaPrior(2.0, 0.15)
-            ).to(device)
-        else:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(
-                    ard_num_dims=n_dims,
-                    lengthscale_prior=GammaPrior(3.0, 1.5),
-                    lengthscale_constraint=GreaterThan(1e-4)
-                ),
-                outputscale_prior=GammaPrior(2.0, 0.15)
-            ).to(device)
-    
-    # Create heteroscedastic model
+    # Create heteroscedastic model using the Most Likely approach
     hetero_model = HeteroscedasticGPModel(
         train_x=train_x,
         train_y=train_y,
         kernel=mean_kernel,
-        noise_kernel=noise_kernel,
-        device=device
+        max_iter=25,  # Match the notebook default
+        tol=1e-04,
+        var_estimate='paper',  # Use the paper's sampling-based method
+        var_samples=1000,
+        norm_and_std=True  # Always normalize and standardize for stability
     )
     
-    # Fit the model (this will set it to eval mode at the end)
-    hetero_model.fit(max_iter=50, lr=0.1)
+    # Fit the model (this implements the full Most Likely algorithm)
+    hetero_model.fit()
     
     # Set to training mode for acquisition function optimization
-    # This allows gradients to flow during acqf optimization
     hetero_model.train()
     
-    print("Heteroscedastic GP model fitted successfully")
+    print("Most Likely Heteroscedastic GP model fitted successfully")
     return None, hetero_model
 
 
@@ -318,8 +303,8 @@ def initialize_modulating_surrogates_model(
     print("Initializing Modulating Surrogates model...")
     
     # Convert to double precision
-    train_x_double = train_x.double().to(device)
-    train_y_double = train_y.double().to(device)
+    train_x_double = train_x.double()
+    train_y_double = train_y.double()
     
     # Handle NaN/Inf
     train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
@@ -333,7 +318,7 @@ def initialize_modulating_surrogates_model(
     
     # Augment training data with modulating dimension
     # Sample uniformly from [0, 1] for each training point
-    modulating_dims = torch.rand(n_train, 1, dtype=torch.double, device=device)
+    modulating_dims = torch.rand(n_train, 1, dtype=torch.double)
     train_x_augmented = torch.cat([train_x_double, modulating_dims], dim=-1)
     
     # Create Matern kernel with ARD for augmented space (d+1 dimensions)
