@@ -1,9 +1,12 @@
 import torch
 import gpytorch
 import warnings
-from typing import Tuple, Any, Dict
+from typing import Tuple, Any
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.priors import GammaPrior
+from gpytorch.constraints import GreaterThan, Interval
+from gpytorch.likelihoods import GaussianLikelihood
 
 # Import baseline models from forgetting_to_improve
 from ..forgetting_to_improve.models import HeteroscedasticGPModel
@@ -135,10 +138,6 @@ def initialize_warped_gp_model(
         train_y_double = train_y_double.unsqueeze(-1)
     
     # Create fresh Matern kernel with same priors as standard GP (not pre-optimized)
-    import gpytorch
-    from gpytorch.priors import GammaPrior
-    from gpytorch.constraints import GreaterThan, Interval
-    from gpytorch.likelihoods import GaussianLikelihood
     
     n_dims = train_x_double.shape[-1]
     
@@ -216,19 +215,23 @@ def initialize_heteroscedastic_gp_model(
     device: str = 'cpu'
 ) -> Tuple[None, HeteroscedasticGPModel]:
     """
-    Initialize a Heteroscedastic GP model.
+    Initialize a Most Likely Heteroscedastic GP model.
+    
+    This implements the algorithm from:
+    "Most Likely Heteroscedastic Gaussian Process Regression"
+    http://people.csail.mit.edu/kersting/papers/kersting07icml_mlHetGP.pdf
     
     Args:
         train_x: Training inputs (n, d)
         train_y: Training targets (n, 1) or (n,)
         mean_kernel: Kernel for the mean GP
-        noise_kernel: Kernel for the noise GP (optional)
+        noise_kernel: Not used (kept for compatibility)
         device: Device for computation
         
     Returns:
         Tuple of (None, model) - mll is None as it's managed internally
     """
-    print("Initializing Heteroscedastic GP model...")
+    print("Initializing Most Likely Heteroscedastic GP model...")
     
     train_x = train_x.to(device)
     train_y = train_y.to(device)
@@ -237,29 +240,126 @@ def initialize_heteroscedastic_gp_model(
     if train_y.ndim > 1:
         train_y = train_y.squeeze(-1)
     
-    # Create noise kernel if not provided
-    if noise_kernel is None:
-        n_dims = train_x.shape[-1]
-        if n_dims == 1:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel()
-            ).to(device)
-        else:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(ard_num_dims=n_dims)
-            ).to(device)
+    # Add priors to mean kernel if not already present
+    if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
+        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 1.5)
+        mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
+    if not hasattr(mean_kernel, 'outputscale_prior'):
+        mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
     
-    # Create heteroscedastic model
+    # Create heteroscedastic model using the Most Likely approach
     hetero_model = HeteroscedasticGPModel(
         train_x=train_x,
         train_y=train_y,
         kernel=mean_kernel,
-        noise_kernel=noise_kernel,
-        device=device
+        max_iter=25,  # Match the notebook default
+        tol=1e-04,
+        var_estimate='paper',  # Use the paper's sampling-based method
+        var_samples=1000,
+        norm_and_std=True  # Always normalize and standardize for stability
+    )
+    
+    # Fit the model (this implements the full Most Likely algorithm)
+    hetero_model.fit()
+    
+    # Set to training mode for acquisition function optimization
+    hetero_model.train()
+    
+    print("Most Likely Heteroscedastic GP model fitted successfully")
+    return None, hetero_model
+
+
+def initialize_modulating_surrogates_model(
+    train_x: torch.Tensor,
+    train_y: torch.Tensor,
+    kernel: Any = None,
+    noise_level: float = 0.1,
+    device: str = 'cpu'
+) -> Tuple[Any, Any]:
+    """
+    Initialize a Modulating Surrogates GP model.
+    
+    Based on "Modulating Surrogates for Bayesian Optimization" paper.
+    This method augments the input space with an additional dimension that has 
+    a uniform prior U[0,1]. During training, this dimension is sampled uniformly
+    for each data point, allowing the model to learn to down-weight detrimental samples.
+    
+    During acquisition optimization, this extra dimension is optimized jointly with
+    the original dimensions to find the optimal modulation value.
+    
+    Args:
+        train_x: Training inputs (n, d)
+        train_y: Training targets (n, 1) or (n,)
+        kernel: Matern kernel from config (same as standard GP uses)
+        noise_level: Noise level for the likelihood
+        device: Device for computation
+        
+    Returns:
+        Tuple of (mll, model)
+    """
+    if not BOTORCH_AVAILABLE:
+        raise ImportError("BoTorch is required for modulating_surrogates method")
+    
+    print("Initializing Modulating Surrogates model...")
+    
+    # Convert to double precision
+    train_x_double = train_x.double()
+    train_y_double = train_y.double()
+    
+    # Handle NaN/Inf
+    train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
+    train_y_double = torch.nan_to_num(train_y_double, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Ensure train_y has shape (n, 1)
+    if train_y_double.ndim == 1:
+        train_y_double = train_y_double.unsqueeze(-1)
+    
+    n_train, n_dims = train_x_double.shape
+    
+    # Augment training data with modulating dimension
+    # Sample uniformly from [0, 1] for each training point
+    modulating_dims = torch.rand(n_train, 1, dtype=torch.double)
+    train_x_augmented = torch.cat([train_x_double, modulating_dims], dim=-1)
+    
+    # Create Matern kernel with ARD for augmented space (d+1 dimensions)
+    base_kernel = gpytorch.kernels.MaternKernel(
+        nu=2.5, 
+        ard_num_dims=n_dims + 1,  # +1 for the modulating dimension
+        lengthscale_prior=GammaPrior(3.0, 1.5),
+        lengthscale_constraint=GreaterThan(1e-4)
+    ).double()
+    
+    kernel_modulating = gpytorch.kernels.ScaleKernel(
+        base_kernel,
+        outputscale_prior=GammaPrior(2.0, 0.15)
+    ).double()
+    
+    # Create likelihood with same noise constraints as standard GP
+    if noise_level > 0:
+        likelihood_modulating = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, noise_level * 10.0)
+        ).double()
+    else:
+        likelihood_modulating = GaussianLikelihood(
+            noise_prior=GammaPrior(1.5, 1.0),
+            noise_constraint=Interval(1e-6, 1e-2)
+        ).double()
+    
+    # Create SingleTaskGP with augmented inputs
+    modulating_model = SingleTaskGP(
+        train_X=train_x_augmented,
+        train_Y=train_y_double,
+        likelihood=likelihood_modulating,
+        covar_module=kernel_modulating
     )
     
     # Fit the model
-    hetero_model.fit(max_iter=50, lr=0.1)
+    mll_modulating = ExactMarginalLogLikelihood(
+        likelihood=modulating_model.likelihood, 
+        model=modulating_model
+    )
+    fit_gpytorch_mll(mll_modulating)
     
-    print("Heteroscedastic GP model fitted successfully")
-    return None, hetero_model
+    print("Modulating Surrogates model fitted successfully")
+    return mll_modulating, modulating_model

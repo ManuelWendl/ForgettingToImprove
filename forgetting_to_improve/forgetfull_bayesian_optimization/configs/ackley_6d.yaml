@@ -1,7 +1,7 @@
 bayes_opt:
   type: comparative
-  objective: botorch_ackley_5d
-  n_seeds: 10
+  objective: botorch_ackley_6d
+  n_seeds: 20
   init_points: 10
   n_iter: 50
   acquisition: qUpperConfidenceBound
@@ -9,9 +9,9 @@ bayes_opt:
     kappa: 2.576
   save_results: true
   plot_results: true
-  results_path: botorch_ackley_5d_statistical.txt
+  results_path: botorch_ackley_6d_statistical.txt
   sample_optimization:
-    algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit]
+    algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
     method: sequential 
     min_samples: 5
   kernel:

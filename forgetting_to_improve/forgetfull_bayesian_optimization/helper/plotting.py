@@ -107,7 +107,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         method_color = colors['method_colors'][i % len(colors['method_colors'])]
         
         # Mean line
-        ax.plot(iterations, stats['simple_regret']['mean'], 
+        ax.semilogy(iterations, stats['simple_regret']['mean'], 
                    color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
         
         # Std bands with light fill + hatching
@@ -127,8 +127,8 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
                         facecolor='none', 
                         linewidth=0, edgecolor=method_color)
     
-    ax.set_xlabel('Iteration')
-    ax.set_ylabel('Simple Regret (log scale)')
+    ax.set_xlabel(r'Iteration $t$')
+    ax.set_ylabel('Simple Regret')
     ax.set_title(f"{config['objective'].replace('_', ' ')} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
@@ -161,7 +161,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
                         facecolor='none', 
                         linewidth=0, edgecolor=method_color)
     
-    ax.set_xlabel('Iteration')
+    ax.set_xlabel(r'Iteration $t$')
     ax.set_ylabel('Cumulative Regret')
     ax.set_title(f"{config['objective'].replace('_', ' ')} - {config['acquisition']}")
     ax.legend(frameon=False)
@@ -195,7 +195,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
                         facecolor='none', 
                         linewidth=0, edgecolor=method_color)
     
-    ax.set_xlabel('Iteration')
+    ax.set_xlabel(r'Iteration $t$')
     ax.set_ylabel('Best Observed Value')
     ax.set_title(f"{config['objective'].replace('_', ' ')} - {config['acquisition']}")
     ax.legend(frameon=False)

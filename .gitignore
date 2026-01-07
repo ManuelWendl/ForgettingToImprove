@@ -1,6 +1,8 @@
 *results/
 *figures/
+custom_figure_folder/
 *__pycache__/
 
 .venv/
 .vscode/
+*.png

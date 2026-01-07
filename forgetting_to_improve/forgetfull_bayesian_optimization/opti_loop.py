@@ -8,7 +8,8 @@ from .filter_samples import filter_samples
 from .baseline_models import (
     initialize_relevance_pursuit_model,
     initialize_warped_gp_model,
-    initialize_heteroscedastic_gp_model
+    initialize_heteroscedastic_gp_model,
+    initialize_modulating_surrogates_model
 )
 
 
@@ -34,7 +35,7 @@ def get_optimization_loop(
         method = None
 
     # Check if using baseline method
-    is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp']
+    is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp', 'modulating_surrogates']
 
     def optimization_loop(num_iters, seed):
         """Runs the Bayesian optimization loop."""
@@ -98,6 +99,17 @@ def get_optimization_loop(
                     device=train_x.device
                 )
             
+            elif algorithm == 'modulating_surrogates':
+                # Reinitialize with modulating surrogates GP
+                noise_level = obs_noise if obs_noise > 0 else 0.1
+                mll, model = initialize_modulating_surrogates_model(
+                    train_x=train_x,
+                    train_y=train_obj,
+                    kernel=None,
+                    noise_level=noise_level,
+                    device=train_x.device
+                )
+            
             # Handle forgetting-based methods
             elif algorithm in ['joint', 'epistemic']:
                 target_region = TargetRegion(global_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
@@ -139,7 +151,14 @@ def get_optimization_loop(
                     print(f"Error fitting model at iteration {i}: {e}")
             
             # Create acquisition function
-            aq = aq_func(model=model, X_baseline=train_x)
+            if algorithm == 'modulating_surrogates':
+                # For modulating surrogates, augment X_baseline with random modulating values
+                n_train = train_x.shape[0]
+                modulating_dims = torch.rand(n_train, 1, dtype=train_x.dtype, device=train_x.device)
+                train_x_augmented = torch.cat([train_x, modulating_dims], dim=-1)
+                aq = aq_func(model=model, X_baseline=train_x_augmented)
+            else:
+                aq = aq_func(model=model, X_baseline=train_x)
 
             # Optimize acquisition function
             if algorithm in ['joint', 'epistemic']:
@@ -156,6 +175,16 @@ def get_optimization_loop(
                     if candidate_acqvalue > new_acqvalue:
                         new_x = candidate_x
                         new_acqvalue = candidate_acqvalue
+            elif algorithm == 'modulating_surrogates':
+                # For modulating surrogates, optimize over augmented space
+                # Augment global bounds with [0, 1] for the modulating dimension
+                augmented_bounds = torch.cat([
+                    global_bounds,
+                    torch.tensor([[0.0], [1.0]], dtype=global_bounds.dtype, device=global_bounds.device)
+                ], dim=1)
+                new_x_aug, new_acqvalue = optimize_acqf_and_get_observation(aq, augmented_bounds)
+                # Remove the modulating dimension from the candidate for objective evaluation
+                new_x = new_x_aug[:, :-1]
             else:
                 # Use global bounds for baseline methods or no algorithm
                 new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, global_bounds)

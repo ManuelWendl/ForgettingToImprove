@@ -404,33 +404,26 @@ def evaluate(
         likelihood = warped_model.likelihood
     
     elif method == 'heteroscedastic_gp':
-        # Heteroscedastic GP uses two GPs: one for mean, one for noise variance
-        # This doesn't strictly require BoTorch, but we keep the structure similar
+        # Most Likely Heteroscedastic GP from the paper:
+        # "Most Likely Heteroscedastic Gaussian Process Regression"
         
-        # Create kernels for mean and noise GPs
+        # Create kernel for the GP
         mean_kernel, _ = create_kernel_from_config(kernel_config, n_dims, fixed_kernel, device)
         
-        # Use a potentially smoother kernel for noise (optional)
-        if n_dims == 1:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel()
-            ).to(device)
-        else:
-            noise_kernel = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(ard_num_dims=n_dims)
-            ).to(device)
-        
-        # Create heteroscedastic GP model
+        # Create heteroscedastic GP model using the Most Likely approach
         hetero_model = HeteroscedasticGPModel(
             train_x=x_samples_torch,
             train_y=y_samples_torch,
             kernel=mean_kernel,
-            noise_kernel=noise_kernel,
-            device=device
+            max_iter=10,
+            tol=1e-03,
+            var_estimate='paper',
+            var_samples=1000,
+            norm_and_std=True
         )
         
-        # Fit the model using alternating optimization
-        hetero_model.fit(max_iter=50, lr=0.1)
+        # Fit the model using the Most Likely algorithm
+        hetero_model.fit()
         
         # No sample optimization needed - the model learns heteroscedastic noise
         x_samples_opt = x_samples
@@ -438,9 +431,9 @@ def evaluate(
         x_samples_opt_torch = x_samples_torch
         y_samples_opt_torch = y_samples_torch
         
-        # Store the heteroscedastic model and use the mean GP's likelihood for compatibility
+        # Store the heteroscedastic model
         model = hetero_model
-        likelihood = hetero_model.mean_likelihood
+        likelihood = None  # Not used for this model
         
     
     elif method == 'sequential':
@@ -547,15 +540,12 @@ def evaluate(
                 y_std_opt = posterior.variance.squeeze(-1).sqrt().cpu().numpy()
             
             elif method == 'heteroscedastic_gp':
-                # For heteroscedastic GP, use custom predict method that returns
-                # mean, epistemic variance, and aleatoric (noise) variance separately
-                mean_pred, epistemic_var, aleatoric_var = model.predict(x_torch)
+                # For heteroscedastic GP, use the posterior with observation noise
+                # This includes the learned heteroscedastic noise
+                posterior = model.posterior(x_torch, observation_noise=True)
                 
-                # Total variance = epistemic + aleatoric
-                total_var = epistemic_var + aleatoric_var
-                
-                y_pred_opt = mean_pred.cpu().numpy()
-                y_std_opt = total_var.sqrt().cpu().numpy()
+                y_pred_opt = posterior.mean.squeeze(-1).cpu().numpy()
+                y_std_opt = posterior.variance.squeeze(-1).sqrt().cpu().numpy()
             
             else:
                 # For GPyTorch models, use likelihood(model(x))
