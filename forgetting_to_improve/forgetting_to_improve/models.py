@@ -565,19 +565,17 @@ class LatentGPModel(SingleTaskGP):
         """
         Fit the model using MCMC to sample from the posterior p(H, θ | F, X).
         
-        Note: Due to GPyTorch caching issues, MCMC sampling is simplified.
-        We sample latent variables but keep the model with zero latent variables.
+        Samples both latent variables H and hyperparameters θ jointly as described in the paper.
         """
-        print(f"Running MCMC with {self.mcmc_method} for posterior inference...")
-        print("Note: Due to GPyTorch limitations, using simplified MCMC sampling...")
+        print(f"Running MCMC with {self.mcmc_method} for joint posterior inference over H and θ...")
         
         try:
-            # Simplified approach: Use Pyro's MCMC without modifying the model
-            # Sample latent variables given the data
+            # Get input dimension
+            input_dim = self.train_X_original.shape[-1]
+            n_train = self.train_X_original.shape[0]
             
-            def simple_model(X_original, Y_original):
-                n_train = X_original.shape[0]
-                
+            # Full Bayesian model: sample both H and θ
+            def full_bayesian_model(X_original, Y_original):
                 # Prior over latent variables: h_n ~ N(0, σ²_h I)
                 h = pyro.sample(
                     "h",
@@ -587,17 +585,53 @@ class LatentGPModel(SingleTaskGP):
                     ).to_event(2)
                 )
                 
-                # Simplified likelihood: assume observations are Gaussian around zero
-                # This is a placeholder since we can't safely evaluate the GP during MCMC
+                # Prior over kernel lengthscales: Gamma(3.0, 1.5) as commonly used
+                # Sample lengthscale for each input dimension + latent dimensions
+                total_dims = input_dim + self.latent_dim
+                lengthscale = pyro.sample(
+                    "lengthscale",
+                    dist.Gamma(3.0 * torch.ones(total_dims), 1.5 * torch.ones(total_dims)).to_event(1)
+                )
+                
+                # Prior over outputscale: Gamma(2.0, 0.15)
+                outputscale = pyro.sample(
+                    "outputscale",
+                    dist.Gamma(2.0, 0.15)
+                )
+                
+                # Prior over noise: Gamma(1.5, 1.0)
+                noise = pyro.sample(
+                    "noise",
+                    dist.Gamma(1.5, 1.0)
+                )
+                
+                # Build augmented inputs
+                X_aug = torch.cat([X_original, h], dim=-1)
+                
+                # Compute kernel matrix with sampled hyperparameters
+                # Using squared exponential (RBF) kernel: k(x, x') = σ² exp(-0.5 * ||x - x'||²_L)
+                # where L is diagonal matrix of lengthscales
+                X_scaled = X_aug / lengthscale.unsqueeze(0)
+                dist_matrix = torch.cdist(X_scaled, X_scaled, p=2)
+                K = outputscale * torch.exp(-0.5 * dist_matrix ** 2)
+                K = K + noise * torch.eye(n_train, dtype=K.dtype, device=K.device)
+                
+                # Add jitter for numerical stability
+                K = K + 1e-5 * torch.eye(n_train, dtype=K.dtype, device=K.device)
+                
+                # Likelihood: Y ~ MVN(0, K)
                 pyro.sample(
                     "obs",
-                    dist.Normal(torch.zeros_like(Y_original.squeeze(-1)), torch.ones_like(Y_original.squeeze(-1))).to_event(1),
+                    dist.MultivariateNormal(
+                        torch.zeros(n_train, dtype=Y_original.dtype, device=Y_original.device),
+                        covariance_matrix=K
+                    ),
                     obs=Y_original.squeeze(-1)
                 )
             
             # Set up MCMC
             if self.mcmc_method == 'NUTS':
-                kernel = NUTS(simple_model, adapt_step_size=True, jit_compile=False)
+                kernel = NUTS(full_bayesian_model, adapt_step_size=True, jit_compile=False)
             else:
                 raise ValueError(f"Unsupported MCMC method: {self.mcmc_method}")
             
@@ -615,32 +649,52 @@ class LatentGPModel(SingleTaskGP):
             samples = mcmc.get_samples()
             self.mcmc_samples_h = samples["h"]  # Shape: (num_samples, n, latent_dim)
             
-            print(f"MCMC completed successfully. Drew {self.num_mcmc_samples} samples.")
-            print(f"Latent variable posterior mean: {self.mcmc_samples_h.mean(dim=0).mean():.4f}")
-            print(f"Latent variable posterior std: {self.mcmc_samples_h.std(dim=0).mean():.4f}")
-            print("Note: Model uses zero latent variables for predictions (posterior samples stored for reference)")
+            # Store hyperparameter samples
+            self.mcmc_samples_theta = []
+            for i in range(self.num_mcmc_samples):
+                theta_sample = {
+                    'lengthscale': samples["lengthscale"][i],
+                    'outputscale': samples["outputscale"][i],
+                    'noise': samples["noise"][i]
+                }
+                self.mcmc_samples_theta.append(theta_sample)
+            
+            print(f"MCMC completed successfully. Drew {self.num_mcmc_samples} samples of (H, θ).")
+            print(f"Latent variable (H) posterior - mean: {self.mcmc_samples_h.mean():.4f}, std: {self.mcmc_samples_h.std():.4f}")
+            print(f"Lengthscale (θ) posterior - mean: {samples['lengthscale'].mean():.4f}, std: {samples['lengthscale'].std():.4f}")
+            print(f"Outputscale (θ) posterior - mean: {samples['outputscale'].mean():.4f}, std: {samples['outputscale'].std():.4f}")
+            print(f"Noise (θ) posterior - mean: {samples['noise'].mean():.4f}, std: {samples['noise'].std():.4f}")
             
         except Exception as e:
             print(f"MCMC failed: {e}")
-            print("Falling back to zero latent variables...")
+            import traceback
+            traceback.print_exc()
+            print("Falling back to zero latent variables and default hyperparameters...")
             # Use zero latent variables as fallback
-            n_train = self.train_X_original.shape[0]
             self.mcmc_samples_h = torch.zeros(
                 1, n_train, self.latent_dim,
                 dtype=self.train_X_original.dtype,
                 device=self.train_X_original.device
             )
+            # Store default hyperparameters
+            self.mcmc_samples_theta = [{
+                'lengthscale': torch.ones(input_dim + self.latent_dim),
+                'outputscale': torch.tensor(1.0),
+                'noise': torch.tensor(0.1)
+            }]
     
-    def get_posterior_samples(self) -> torch.Tensor:
+    def get_posterior_samples(self) -> tuple[torch.Tensor, List[dict]]:
         """
-        Get MCMC samples of latent variables.
+        Get MCMC samples of latent variables and hyperparameters.
         
         Returns:
-            Tensor of shape (num_samples, n, latent_dim)
+            Tuple of (H_samples, theta_samples) where:
+            - H_samples: Tensor of shape (num_samples, n, latent_dim)
+            - theta_samples: List of dicts containing 'lengthscale', 'outputscale', 'noise'
         """
-        if self.mcmc_samples_h is None:
+        if self.mcmc_samples_h is None or self.mcmc_samples_theta is None:
             raise RuntimeError("Must call fit_with_mcmc() before getting posterior samples")
-        return self.mcmc_samples_h
+        return self.mcmc_samples_h, self.mcmc_samples_theta
     
     def posterior_with_samples(
         self,

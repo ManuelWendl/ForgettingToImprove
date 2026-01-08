@@ -10,10 +10,9 @@ from .baseline_models import (
     initialize_relevance_pursuit_model,
     initialize_warped_gp_model,
     initialize_heteroscedastic_gp_model,
-    initialize_modulating_surrogates_model
+    initialize_modulating_surrogates_model,
+    create_mc_latent_acquisition
 )
-from .mc_acquisition import create_mc_latent_acquisition
-
 
 def get_optimization_loop(
         aq_func, 
