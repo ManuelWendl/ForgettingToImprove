@@ -1,7 +1,7 @@
 import torch
 from typing import Dict, Any, Callable, Tuple, List
 from botorch.models import SingleTaskGP
-from botorch.test_functions import Ackley, Branin, Rosenbrock, Levy, Beale, HolderTable, Griewank
+from botorch.test_functions import Ackley, Branin, Rosenbrock, Levy, Beale, HolderTable, Griewank, Hartmann
 from botorch.acquisition import (
     qUpperConfidenceBound, 
     qLogExpectedImprovement, 
@@ -31,11 +31,12 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
         'botorch_ackley_2d': (Ackley(dim=2, negate=True), torch.tensor([[-10.0] * 2, [30.0] * 2], dtype=torch.float64)),
         'botorch_ackley_6d': (Ackley(dim=6, negate=True), torch.tensor([[-10.0] * 6, [30.0] * 6], dtype=torch.float64)),
         'botorch_branin': (Branin(negate=True), torch.tensor([[-5.0, 10.0], [0.0, 15.0]], dtype=torch.float64)),
-        'botorch_griewank': (Griewank(negate=True), torch.tensor([[-40.0] * 2, [30.0] * 2], dtype=torch.float64)),
-        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64)),
-        'botorch_levy_4d': (Levy(dim=4, negate=True), torch.tensor([[-10.0] * 4, [10.0] * 4], dtype=torch.float64)),
+        'botorch_griewank': (Griewank(negate=True), torch.tensor([[-50.0] * 2, [20.0] * 2], dtype=torch.float64)),
+        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[-5.0] * 2, [10.0] * 2], dtype=torch.float64)),
+        'botorch_levy': (Levy(dim=2, negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64)),
         'botorch_beal': (Beale(negate=True), torch.tensor([[-4.5] * 2, [4.5] * 2], dtype=torch.float64)),
-        'botorch_holder_table': (HolderTable(negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64))
+        'botorch_holder_table': (HolderTable(negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64)),
+        'botorch_hartmann_6d': (Hartmann(dim=6, negate=True), torch.tensor([[0.0] * 6, [1.0] * 6], dtype=torch.float64))
     }
     
     if objective_name not in objective_map:
@@ -56,11 +57,11 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         GPyTorch kernel module
     """
     if not kernel_configs:
-        # Default: Matern 2.5 kernel with priors for unnormalized inputs
+        # Default: Matern 2.5 kernel with standard BoTorch priors for [0,1] normalized inputs
         base_kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
-            lengthscale_prior=GammaPrior(3.0, 1.5),
+            lengthscale_prior=GammaPrior(3.0, 6.0),
             lengthscale_constraint=GreaterThan(1e-4)
         )
         return ScaleKernel(
@@ -75,11 +76,11 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         if kernel_type == 'matern':
             nu = kernel_config.get('nu', 2.5)
             length_scale = kernel_config.get('length_scale', 1.0)
-            # Add prior and constraint to lengthscale for numerical stability
+            # Standard BoTorch prior for [0,1] normalized inputs
             kernel = MaternKernel(
                 nu=nu, 
                 ard_num_dims=input_dim,
-                lengthscale_prior=GammaPrior(3.0, 1.5),
+                lengthscale_prior=GammaPrior(3.0, 6.0),
                 lengthscale_constraint=GreaterThan(1e-4)
             )
             if length_scale != 1.0:
@@ -92,10 +93,10 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             
         elif kernel_type == 'rbf':
             length_scale = kernel_config.get('length_scale', 1.0)
-            # Add prior and constraint to lengthscale for numerical stability
+            # Standard BoTorch prior for [0,1] normalized inputs
             kernel = RBFKernel(
                 ard_num_dims=input_dim,
-                lengthscale_prior=GammaPrior(3.0, 1.5),
+                lengthscale_prior=GammaPrior(3.0, 6.0),
                 lengthscale_constraint=GreaterThan(1e-4)
             )
             if length_scale != 1.0:
@@ -118,11 +119,11 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
     elif len(kernels) > 1:
         return AdditiveKernel(*kernels)
     else:
-        # Fallback with priors for unnormalized inputs
+        # Fallback with standard BoTorch priors for [0,1] normalized inputs
         base_kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
-            lengthscale_prior=GammaPrior(3.0, 1.5),
+            lengthscale_prior=GammaPrior(3.0, 6.0),
             lengthscale_constraint=GreaterThan(1e-4)
         )
         return ScaleKernel(

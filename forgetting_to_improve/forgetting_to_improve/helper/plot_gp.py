@@ -4,6 +4,160 @@ import matplotlib.ticker as ticker
 from tueplots import bundles, figsizes
 from seaborn import axes_style
 import os
+import numpy as np
+from scipy import stats
+
+def plot_predictions_comparison(objective_function, x, comparison_data, x_limits, A_limits, title=None, annotation=False):
+    """
+    Plot multiple GP predictions side-by-side with shared legend using ICLR 2023 style.
+    
+    Args:
+        objective_function: The true objective function
+        x: Test points
+        comparison_data: Dict mapping method names to dicts with keys:
+                        'x_samples', 'y_samples', 'y_pred', 'y_std'
+        x_limits: Limits for x-axis
+        A_limits: Limits for the region box
+        title: Base title for the plot
+        annotation: Whether to annotate sample indices
+    """
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    n_methods = len(comparison_data)
+    method_names = list(comparison_data.keys())
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(1, n_methods, 
+                            figsize=(figsizes.iclr2023(nrows=1, ncols=n_methods+1,height_to_width_ratio=1.5)['figure.figsize'][0], 
+                                    figsizes.iclr2023(nrows=1, ncols=n_methods+1,height_to_width_ratio=1.5)['figure.figsize'][1]))
+    
+    # Handle single subplot case
+    if n_methods == 1:
+        axes = [axes]
+    
+    # Define colors matching the reference style
+    colors = {
+        'true_function': "#666666",    # Black
+        'samples': "#5F4690",          # Blue-purple
+        'prediction': "#1D6996",       # Blue
+        'uncertainty': "#38A6A5",      # Teal
+        'region': "#73AF48"         # Light green for region
+    }
+    
+    # Create method title mapping
+    method_titles = {
+        'none': 'Homoscedastic GP',
+        'heteroscedastic_gp': 'Heteroscedastic GP',
+        'sequential': 'Forgetting to Improve',
+        'batch': 'Batch Optimization',
+        'targetSampling': 'Target Sampling',
+        'relevance_pursuit': 'Relevance Pursuit',
+        'warped_gp': 'Warped GP'
+    }
+    
+    handles, labels = None, None
+    
+    for idx, (ax, method) in enumerate(zip(axes, method_names)):
+        data = comparison_data[method]
+        x_samples = data['x_samples']
+        y_samples = data['y_samples']
+        y_pred = data['y_pred']
+        y_std = data['y_std']
+        
+        # Add formatter for scientific notation
+        formatter = ticker.ScalarFormatter(useMathText=True)
+        formatter.set_scientific(True)
+        formatter.set_powerlimits((-1, 1))
+        ax.xaxis.set_major_formatter(formatter)
+        
+        # Plot region box
+        box = Rectangle((A_limits[0], min(objective_function(x))-3), 
+                       A_limits[1] - A_limits[0], 
+                       max(objective_function(x))+3 - (min(objective_function(x))-3), 
+                       linewidth=1.25, edgecolor=colors['region'], 
+                       facecolor=colors['region'], alpha=0.2, zorder=0, label=r'$\mathcal{A}$')
+        ax.add_patch(box)
+        
+        # Plot true function
+        ax.plot(x, objective_function(x), color=colors['true_function'], 
+                linewidth=1.5, label=r'$f^*$', alpha=0.8)
+        
+        # Plot samples with specific marker style
+        ax.scatter(x_samples, y_samples, c=colors['samples'], marker='o', 
+                  s=25, label='Samples', edgecolors=colors['samples'], linewidth=0.1, zorder=5)
+        
+        # Add sample index annotations if requested
+        if annotation:
+            for i, (x_sample, y_sample) in enumerate(zip(x_samples, y_samples)):
+                ax.annotate(str(i), (x_sample, y_sample), 
+                           xytext=(3, 3), textcoords='offset points',
+                           fontsize=6, color='black', 
+                           bbox=dict(boxstyle='round,pad=0.2', facecolor='white', 
+                                    edgecolor='none', alpha=0.7))
+        
+        # Plot GP prediction
+        ax.plot(x, y_pred, color=colors['prediction'], linestyle='-', 
+                linewidth=1.5, label=r'$\mu_{\mathrm{GP}}(x)$')
+        
+        # Plot uncertainty band
+        ax.fill_between(x, y_pred - 2.567 * y_std, y_pred + 2.567 * y_std, 
+                        color=colors['uncertainty'], alpha=0.3, 
+                        label=r'$\sigma_{\mathrm{GP}}(x)$')
+        
+        # Set labels with LaTeX formatting (only leftmost gets y-label)
+        ax.set_xlabel('$x$')
+        if idx == 0:
+            ax.set_ylabel('$f(x)$')
+        
+        # Set y-limits and x-limits
+        ax.set_ylim(min(objective_function(x))-.1, max(objective_function(x))+1.5)
+        ax.set_xlim(x_limits)
+        
+        # Set subplot title
+        subplot_title = method_titles.get(method, method)
+        ax.set_title(subplot_title, fontsize=9)
+        
+        # Style the spines
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.25)
+        
+        # Collect handles and labels from the first subplot for shared legend
+        if idx == 0:
+            handles, labels = ax.get_legend_handles_labels()
+    
+    # Remove individual legends from subplots
+    for ax in axes:
+        if ax.get_legend():
+            ax.get_legend().remove()
+    
+    # Create shared legend at the top
+    if handles and labels:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(1.05, 0.5), 
+                  ncol=1, frameon=False, columnspacing=0.8,
+                  handletextpad=0.4, handlelength=1.2, fontsize=8)
+    
+    # Adjust layout to prevent overlap
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    # Save the plot
+    if title:
+        filename = title.replace(" ", "_").lower() + '.pdf'
+    else:
+        filename = 'comparison_' + '_'.join(method_names).lower() + '.pdf'
+    
+    # Create figures directory if it doesn't exist
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Comparison plot saved to {filepath}")
+    plt.close()
 
 def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std, x_limits, A_limits, title=None, annotation=False):
     """
@@ -13,7 +167,7 @@ def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std,
     theme = bundles.iclr2023()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=2))  # Changed to ncols=2 for side-by-side
+    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=1))  # Changed to ncols=2 for side-by-side
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
     plt.rcParams.update({"legend.frameon": False})
 
@@ -47,7 +201,7 @@ def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std,
     }
     
     # Plot region box
-    box = Rectangle((A_limits[0], min(objective_function(x))-1), A_limits[1] - A_limits[0], max(objective_function(x))+1 - (min(objective_function(x))-1), linewidth=1.25, edgecolor='gray', 
+    box = Rectangle((A_limits[0], min(objective_function(x))-3), A_limits[1] - A_limits[0], max(objective_function(x))+3 - (min(objective_function(x))-3), linewidth=1.25, edgecolor='gray', 
                     facecolor=colors['region'], alpha=0.3, zorder=0, label=r'$\mathcal{A}$')
     ax.add_patch(box)
     
@@ -81,8 +235,8 @@ def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std,
     ax.set_xlabel('$x$')
     ax.set_ylabel('$f(x)$')
     
-    # Set y-limits
-    ax.set_ylim(min(objective_function(x)), max(objective_function(x)))
+    # # Set y-limits
+    ax.set_ylim(min(objective_function(x))-3, max(objective_function(x))+3)
     ax.set_xlim(x_limits)
 
     # Style the spines
@@ -469,6 +623,119 @@ def plot_calibration_curve(p_levels, p_hat, title="Calibration Curve"):
     filepath = os.path.join(figures_dir, filename)
     
     fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    plt.close()
+
+
+def plot_calibration_comparison(objective_function, x, comparison_data, title=None):
+    """
+    Plot calibration curves for multiple methods side-by-side using ICLR 2023 style.
+    
+    Args:
+        objective_function: The true objective function
+        x: Test points
+        comparison_data: Dict mapping method names to dicts with keys:
+                        'x_samples', 'y_samples', 'y_pred', 'y_std'
+        title: Base title for the plot
+    """
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    n_methods = len(comparison_data)
+    method_names = list(comparison_data.keys())
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(1, n_methods, 
+                            figsize=(figsizes.iclr2023(nrows=1, ncols=n_methods, height_to_width_ratio=1.0)['figure.figsize'][0]/2, 
+                                    figsizes.iclr2023(nrows=1, ncols=n_methods, height_to_width_ratio=1.0)['figure.figsize'][1]))
+    
+    # Handle single subplot case
+    if n_methods == 1:
+        axes = [axes]
+    
+    # Create method title mapping
+    method_titles = {
+        'none': 'Homoscedastic GP',
+        'heteroscedastic_gp': 'Heteroscedastic GP',
+        'sequential': 'Forgetting to Improve',
+        'batch': 'Batch Optimization',
+        'targetSampling': 'Target Sampling',
+        'relevance_pursuit': 'Relevance Pursuit',
+        'warped_gp': 'Warped GP'
+    }
+    
+    p_levels = np.linspace(0.0, 1.0, 10)
+    
+    for idx, (ax, method) in enumerate(zip(axes, method_names)):
+        data = comparison_data[method]
+        y_pred = data['y_pred']
+        y_std = data['y_std']
+        
+        # Get true values
+        y_true = objective_function(x)
+        
+        # Compute calibration curve
+        z = np.abs((y_true - y_pred) / y_std)  # standardized absolute residuals
+        
+        # Empirical coverage for each nominal central interval
+        p_hat = np.empty(len(p_levels))
+        for i, p in enumerate(p_levels):
+            alpha = (1 - p) / 2.0
+            z_thresh = stats.norm.ppf(1 - alpha)  # two-sided z threshold
+            p_hat[i] = np.mean(z <= z_thresh)     # fraction inside central interval
+        
+        # Compute calibration error
+        weights = np.ones(len(p_levels)) / len(p_levels)
+        sq_diffs = (p_levels - p_hat) ** 2
+        ce = float(np.sum(weights * sq_diffs))
+        
+        # Add grid
+        ax.grid(True, linewidth=0.5, c="gainsboro", zorder=0)
+        
+        # Plot calibration bars
+        ax.bar(p_levels-(1/(2*len(p_levels))), p_hat, width=0.1, alpha=0.7, 
+               color='#5F4690', label='Empirical', zorder=4)
+        
+        # Plot ideal calibration line
+        ax.plot([0, 1], [0, 1], linestyle='--', color='black', label='Ideal', zorder=5)
+        
+        # Set labels with LaTeX formatting (only leftmost gets y-label)
+        ax.set_xlabel('$p$')
+        if idx == 0:
+            ax.set_ylabel('$\\hat{p}$')
+        
+        # Set limits and aspect
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect('equal', adjustable='box')
+        
+        # Set subplot title with CE value
+        subplot_title = method_titles.get(method, method)
+        ax.set_title(f"{subplot_title}\nCE = {ce:.4f}", fontsize=9)
+        
+        # Style the spines
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.25)
+    
+    # Adjust layout to prevent overlap
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
+    
+    # Save the plot
+    if title:
+        filename = title.replace(" ", "_").lower() + '_calibration.pdf'
+    else:
+        filename = 'calibration_comparison_' + '_'.join(method_names).lower() + '.pdf'
+    
+    # Create figures directory if it doesn't exist
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Calibration comparison plot saved to {filepath}")
     plt.close()
 
 

@@ -57,8 +57,9 @@ def evaluate(
     feature_subset: Optional[Union[int, List[int]]] = None,
     kernel_config: Optional[List[dict]] = None,
     gp_alpha: float = 0.01,
-    device: str = 'cpu'
-) -> Tuple[dict, int]:
+    device: str = 'cpu',
+    return_plot_data: bool = False
+) -> Union[Tuple[dict, int], Tuple[dict, int, dict]]:
     """
     Evaluate the GP optimization method using GPyTorch.
     
@@ -80,10 +81,12 @@ def evaluate(
         kernel_config: Kernel configuration
         gp_alpha: GP noise parameter
         device: Device for computation ('cpu' or 'cuda')
+        return_plot_data: Whether to return plotting data (for comparison plots)
         
     Returns:
         errors: Dictionary of error metrics
         num_optimized_samples: Number of samples after optimization
+        plot_data: (Optional) Dictionary with plotting data if return_plot_data=True
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -517,7 +520,7 @@ def evaluate(
     # Make predictions (for all methods including BoTorch models)
     try:
         model.eval()
-        likelihood.eval()
+        likelihood.eval() if not method == 'heteroscedastic_gp' else None
         
         x_torch = torch.from_numpy(x).float().to(device)
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
@@ -566,8 +569,8 @@ def evaluate(
         title=f"{method}{noise} Calibration Curve {seed}"
     )
     
-    # Only plot for 1D case
-    if show_plots and n_dims == 1 and plot_func is not None:
+    # Only plot for 1D case (single method plots)
+    if show_plots and n_dims == 1 and plot_func is not None and not return_plot_data:
         plot_predictions(
             plot_func,
             x.flatten(),
@@ -579,5 +582,17 @@ def evaluate(
             A_limits,
             title=f"{method}{noise} Optimized GP Predictions {seed}"
         )
+    
+    # Return plot data if requested (for comparison plots)
+    if return_plot_data:
+        plot_data = {
+            'x': x.flatten() if n_dims == 1 else x,
+            'x_samples': x_samples_opt.flatten() if n_dims == 1 else x_samples_opt,
+            'y_samples': y_samples_opt,
+            'y_pred': y_pred_opt,
+            'y_std': y_std_opt,
+            'objective_func': plot_func
+        }
+        return errors, len(x_samples_opt), plot_data
     
     return errors, len(x_samples_opt)

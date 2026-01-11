@@ -1,20 +1,19 @@
 experiment:
   type: single
-  method: heteroscedastic_gp
+  method: [none, sequential]
   objective: twitter
   noise: joint
-  A_limits: [0.25, 1.0]
+  A_limits: [0.25, 0.9]
   X_limits: [-0.25, 1.0]
   num_samples: 405
   num_train_samples: 50
   num_A_samples: 80
   seed: 5
-  fixed_kernel: false
+  fixed_kernel: true
   show_plots: true
   show_hessian: false
   kernel:
   - type: 'rbf'
     length_scale: 0.1
   - type: white
-    noise_level: 0.0002
-
+    noise_level: 0.01

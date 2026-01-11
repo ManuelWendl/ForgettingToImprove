@@ -242,9 +242,9 @@ def initialize_heteroscedastic_gp_model(
     if train_y.ndim > 1:
         train_y = train_y.squeeze(-1)
     
-    # Add priors to mean kernel if not already present
+    # Add standard BoTorch priors to mean kernel for [0,1] normalized inputs
     if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
-        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 1.5)
+        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 6.0)
         mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
     if not hasattr(mean_kernel, 'outputscale_prior'):
         mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
@@ -254,11 +254,11 @@ def initialize_heteroscedastic_gp_model(
         train_x=train_x,
         train_y=train_y,
         kernel=mean_kernel,
-        max_iter=25,  # Match the notebook default
+        max_iter=10,  # Match the notebook default
         tol=1e-04,
         var_estimate='paper',  # Use the paper's sampling-based method
         var_samples=1000,
-        norm_and_std=True  # Always normalize and standardize for stability
+        norm_and_std=False  # Always normalize and standardize for stability
     )
     
     # Fit the model (this implements the full Most Likely algorithm)
@@ -277,8 +277,8 @@ def initialize_modulating_surrogates_model(
     kernel: Any = None,
     noise_level: float = 0.1,
     device: str = 'cpu',
-    num_mcmc_samples: int = 100,
-    num_warmup: int = 20
+    num_mcmc_samples: int = 50,
+    num_warmup: int = 500
 ) -> Tuple[Any, Any]:
     """
     Initialize a Modulating Surrogates GP model using Latent GP (LGP).
@@ -327,17 +327,17 @@ def initialize_modulating_surrogates_model(
     n_train, n_dims = train_x_double.shape
     
     # Create Matern kernel with ARD for augmented space (d + latent_dim dimensions)
+    # Standard BoTorch priors for [0,1] normalized inputs
     latent_dim = 1  # One latent variable per training point
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
         ard_num_dims=n_dims + latent_dim,  # +latent_dim for the latent variables
-        lengthscale_prior=GammaPrior(3.0, 1.5),
+        lengthscale_prior=GammaPrior(3.0, 6.0),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
     
     kernel_modulating = gpytorch.kernels.ScaleKernel(
         base_kernel,
-        outputscale_prior=GammaPrior(2.0, 0.15)
     ).double()
     
     # Create likelihood with same noise constraints as standard GP

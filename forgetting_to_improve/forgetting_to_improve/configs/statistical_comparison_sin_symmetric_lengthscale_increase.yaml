@@ -15,3 +15,5 @@ experiment:
   kernel:
     - type: rbf
       length_scale: 1.0
+        - type: white
+      noise_level: 0.1

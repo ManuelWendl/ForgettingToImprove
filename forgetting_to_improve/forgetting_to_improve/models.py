@@ -590,7 +590,7 @@ class LatentGPModel(SingleTaskGP):
                 total_dims = input_dim + self.latent_dim
                 lengthscale = pyro.sample(
                     "lengthscale",
-                    dist.Gamma(3.0 * torch.ones(total_dims), 1.5 * torch.ones(total_dims)).to_event(1)
+                    dist.Gamma(3.0 * torch.ones(total_dims), 6.0 * torch.ones(total_dims)).to_event(1)
                 )
                 
                 # Prior over outputscale: Gamma(2.0, 0.15)

@@ -4,11 +4,12 @@ from .evaluate import evaluate
 from .objectives import sin_symmetric_lengthscale_increase
 from .helper.config_loader import ConfigLoader
 from .helper.results_writer import ResultsWriter
+from .helper.plot_gp import plot_predictions_comparison, plot_calibration_comparison
 
 
-def run_single_experiment(config, method, objective_name, objective_func, objective_type, noise, seed, results_writer, write_individual=False):
-    """Run a single experiment with given parameters."""        
-    results, num_samples_opt = evaluate(
+def run_single_experiment(config, method, objective_name, objective_func, objective_type, noise, seed, results_writer, write_individual=False, return_plot_data=False):
+    """Run a single experiment with given parameters."""
+    result = evaluate(
         method=method,
         objective_func=objective_func,
         noise=noise,
@@ -19,13 +20,20 @@ def run_single_experiment(config, method, objective_name, objective_func, object
         num_A_samples=config['num_A_samples'],
         seed=seed,
         fixed_kernel=config['fixed_kernel'],
-        show_plots=config['show_plots'],
+        show_plots=config['show_plots'] and not return_plot_data,  # Disable plots when collecting data for comparison
         show_hessian=config['show_hessian'],
         objective_type=objective_type,
         feature_subset=config.get('feature_subset', None),
         kernel_config=config.get('kernel_config', None),
-        gp_alpha=config.get('gp_alpha', 0.01)
+        gp_alpha=config.get('gp_alpha', 0.01),
+        return_plot_data=return_plot_data
     )
+    
+    if return_plot_data:
+        results, num_samples_opt, plot_data = result
+    else:
+        results, num_samples_opt = result
+        plot_data = None
     
     # Write results for single experiment only if requested
     if write_individual:
@@ -33,6 +41,8 @@ def run_single_experiment(config, method, objective_name, objective_func, object
             config, results, method, objective_name, noise, seed
         )
     
+    if return_plot_data:
+        return results, num_samples_opt, plot_data
     return results, num_samples_opt
 
 def run_experiments_from_config(config_path):
@@ -51,9 +61,14 @@ def run_experiments_from_config(config_path):
     compare_methods = len(config['methods']) > 1
     compare_noises = len(config['noises']) > 1
     is_statistical = config['type'] == 'statistic'
+    is_single = config['type'] == 'single'
+    
+    # Check if we're doing a comparison plot for single experiment
+    is_single_comparison = is_single and compare_methods and not compare_noises
     
     # Store all results for comparison
     all_results = {}
+    comparison_plot_data = {}  # For single experiment comparisons
     
     # Run experiments for all combinations
     for method in config['methods']:
@@ -84,10 +99,23 @@ def run_experiments_from_config(config_path):
                 seed_results = []
                 num_zero_samples = 0
                 for seed in config['seeds']:
-                    results, num_samples_opt = run_single_experiment(
-                        config, method, objective_name, objective_func, objective_type, noise, seed, results_writer, 
-                        write_individual=not is_statistical
-                    )
+                    # For single experiment comparison, request plot data
+                    if is_single_comparison:
+                        result = run_single_experiment(
+                            config, method, objective_name, objective_func, objective_type, noise, seed, results_writer, 
+                            write_individual=not is_statistical,
+                            return_plot_data=True
+                        )
+                        results, num_samples_opt, plot_data = result
+                        # Store plot data for the first seed only
+                        if seed == config['seeds'][0]:
+                            comparison_plot_data[method] = plot_data
+                    else:
+                        results, num_samples_opt = run_single_experiment(
+                            config, method, objective_name, objective_func, objective_type, noise, seed, results_writer, 
+                            write_individual=not is_statistical
+                        )
+                    
                     seed_results.append(results)
                     if num_samples_opt == 0:
                         num_zero_samples += 1
@@ -103,6 +131,44 @@ def run_experiments_from_config(config_path):
                     print(f"  Number of Zero Samples: {num_zero_samples} out of {len(config['seeds'])} seeds")
                 else:
                     all_results[variant_key] = seed_results[0]
+    
+    # Create comparison plot for single experiment with multiple methods
+    if is_single_comparison and comparison_plot_data and config['show_plots']:
+        print(f"Creating comparison plot for methods: {list(comparison_plot_data.keys())}")
+        # Extract common data from first method
+        first_method_data = next(iter(comparison_plot_data.values()))
+        objective_func = first_method_data['objective_func']
+        x = first_method_data['x']
+        
+        # Prepare data for plotting
+        plot_comparison_data = {}
+        for method, data in comparison_plot_data.items():
+            plot_comparison_data[method] = {
+                'x_samples': data['x_samples'],
+                'y_samples': data['y_samples'],
+                'y_pred': data['y_pred'],
+                'y_std': data['y_std']
+            }
+        
+        # Generate comparison plot
+        seed = config['seeds'][0]
+        objective_name = config['objectives'][0]
+        plot_predictions_comparison(
+            objective_func,
+            x,
+            plot_comparison_data,
+            config['X_limits'],
+            config['A_limits'],
+            title=f"Comparison_{objective_name}_seed{seed}"
+        )
+        
+        # Generate calibration comparison plot
+        plot_calibration_comparison(
+            objective_func,
+            x,
+            plot_comparison_data,
+            title=f"Comparison_{objective_name}_seed{seed}"
+        )
     
     # Write comparison results if needed
     if compare_methods or compare_noises or is_statistical:
