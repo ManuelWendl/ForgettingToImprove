@@ -22,6 +22,7 @@ def run_single_experiment(config, method, objective_name, objective_func, object
         fixed_kernel=config['fixed_kernel'],
         show_plots=config['show_plots'] and not return_plot_data,  # Disable plots when collecting data for comparison
         show_hessian=config['show_hessian'],
+        calculate_convexity=config.get('calculate_convexity', False),
         objective_type=objective_type,
         feature_subset=config.get('feature_subset', None),
         kernel_config=config.get('kernel_config', None),
@@ -167,7 +168,8 @@ def run_experiments_from_config(config_path):
             objective_func,
             x,
             plot_comparison_data,
-            title=f"Comparison_{objective_name}_seed{seed}"
+            title=f"Comparison_{objective_name}_seed{seed}",
+            A_limits=config['A_limits']
         )
     
     # Write comparison results if needed

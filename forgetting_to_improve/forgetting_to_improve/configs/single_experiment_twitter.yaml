@@ -1,6 +1,6 @@
 experiment:
   type: single
-  method: heteroscedastic_gp
+  method: sequential
   objective: twitter
   noise: joint
   A_limits: [0.25, 1.0]
@@ -12,6 +12,7 @@ experiment:
   fixed_kernel: false
   show_plots: true
   show_hessian: false
+  calculate_convexity: true
   kernel:
   - type: 'rbf'
     length_scale: 0.1

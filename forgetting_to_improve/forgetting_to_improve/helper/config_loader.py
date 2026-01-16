@@ -106,6 +106,7 @@ class ConfigLoader:
             'fixed_kernel': experiment.get('fixed_kernel', True),
             'show_plots': experiment.get('show_plots', False),
             'show_hessian': experiment.get('show_hessian', False),
+            'calculate_convexity': experiment.get('calculate_convexity', False),
             'feature_subset': experiment.get('feature_subset', None),
             'kernel_config': kernel_config,
             'gp_alpha': experiment.get('gp_alpha', 0.01),

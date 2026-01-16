@@ -28,4 +28,6 @@ experiment:
   feature_subset: null  # Use the single time feature
   kernel:
     - type: rbf
-      length_scale: 0.1  # Relatively smooth for price data
+      length_scale: 0.1 # Relatively smooth for price data
+    - type: white
+      noise_level: 0.1

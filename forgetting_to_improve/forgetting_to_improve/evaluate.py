@@ -2,8 +2,9 @@ import torch
 import gpytorch
 import numpy as np
 import warnings
+import time
 from typing import Tuple, Optional, List, Union, Callable
-from .helper.plot_gp import plot_predictions
+from .helper.plot_gp import plot_predictions, plot_curvature_bounds
 from .helper.error import calculate_prediction_errors
 from .helper.kernel_factory import create_kernel_from_config
 from .helper.data_loader import load_dataset
@@ -53,6 +54,7 @@ def evaluate(
     fixed_kernel: bool = True,
     show_plots: bool = False,
     show_hessian: bool = False,
+    calculate_convexity: bool = False,
     objective_type: str = 'function',
     feature_subset: Optional[Union[int, List[int]]] = None,
     kernel_config: Optional[List[dict]] = None,
@@ -76,6 +78,7 @@ def evaluate(
         fixed_kernel: Whether to fix kernel hyperparameters
         show_plots: Whether to show plots
         show_hessian: Whether to show Hessian
+        calculate_convexity: Whether to compute curvature bounds m_epi and M_ale
         objective_type: Type of objective ('function' or 'dataset')
         feature_subset: Subset of features to use
         kernel_config: Kernel configuration
@@ -90,6 +93,8 @@ def evaluate(
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
+    
+    start_time = time.time()
     
     device = torch.device(device)
     
@@ -238,6 +243,8 @@ def evaluate(
     likelihood.eval()
     
     # Optimize the training samples by removing detrimental ones
+    curvature_history = {'m_epi': [], 'M_ale': [], 'ratio': [], 'n_samples': []}  # Initialize for all methods
+    
     if method == 'none':
         x_samples_opt = x_samples
         y_samples_opt = y_samples
@@ -440,7 +447,7 @@ def evaluate(
         
     
     elif method == 'sequential':
-        x_samples_opt_torch, y_samples_opt_torch, _ = sequentially_optimize_samples(
+        x_samples_opt_torch, y_samples_opt_torch, _, curvature_history = sequentially_optimize_samples(
             model,
             likelihood,
             x_samples_torch.clone(),
@@ -448,7 +455,9 @@ def evaluate(
             x_A_torch,
             max_iter=len(x_samples) - 2,
             noise_type=noise,
-            show_hessian=show_hessian
+            show_hessian=show_hessian,
+            calculate_convexity=calculate_convexity,
+            A_limits=A_limits
         )
         x_samples_opt = x_samples_opt_torch.cpu().numpy()
         y_samples_opt = y_samples_opt_torch.cpu().numpy()
@@ -569,6 +578,10 @@ def evaluate(
         title=f"{method}{noise} Calibration Curve {seed}"
     )
     
+    # Add runtime to errors
+    runtime = time.time() - start_time
+    errors['Runtime'] = runtime
+    
     # Only plot for 1D case (single method plots)
     if show_plots and n_dims == 1 and plot_func is not None and not return_plot_data:
         plot_predictions(
@@ -581,6 +594,13 @@ def evaluate(
             X_limits,
             A_limits,
             title=f"{method}{noise} Optimized GP Predictions {seed}"
+        )
+    
+    # Plot curvature bounds if they were calculated
+    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m_epi'):
+        plot_curvature_bounds(
+            curvature_history, 
+            title="Curvature Bound under Forgetting to Improve"
         )
     
     # Return plot data if requested (for comparison plots)

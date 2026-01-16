@@ -17,5 +17,5 @@ bayes_opt:
   kernel:
     - type: matern
       nu: 2.5
-      length_scale: 1.0           
-  alpha: 0.1
+      length_scale: 0.1           
+  alpha: 0.01

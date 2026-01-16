@@ -115,7 +115,7 @@ def plot_predictions_comparison(objective_function, x, comparison_data, x_limits
             ax.set_ylabel('$f(x)$')
         
         # Set y-limits and x-limits
-        ax.set_ylim(min(objective_function(x))-.1, max(objective_function(x))+1.5)
+        ax.set_ylim(min(objective_function(x))-1.5, max(objective_function(x))+1.5)
         ax.set_xlim(x_limits)
         
         # Set subplot title
@@ -626,7 +626,7 @@ def plot_calibration_curve(p_levels, p_hat, title="Calibration Curve"):
     plt.close()
 
 
-def plot_calibration_comparison(objective_function, x, comparison_data, title=None):
+def plot_calibration_comparison(objective_function, x, comparison_data, title=None, A_limits=None):
     """
     Plot calibration curves for multiple methods side-by-side using ICLR 2023 style.
     
@@ -636,6 +636,8 @@ def plot_calibration_comparison(objective_function, x, comparison_data, title=No
         comparison_data: Dict mapping method names to dicts with keys:
                         'x_samples', 'y_samples', 'y_pred', 'y_std'
         title: Base title for the plot
+        A_limits: Target region limits (tuple for 1D or list of tuples for multidimensional)
+                  If provided, calibration is computed only within this region
     """
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
@@ -676,6 +678,36 @@ def plot_calibration_comparison(objective_function, x, comparison_data, title=No
         
         # Get true values
         y_true = objective_function(x)
+        
+        # Filter data to target region if A_limits is provided
+        if A_limits is not None:
+            # Handle both 1D and multidimensional regions
+            if x.ndim == 1 or (x.ndim == 2 and x.shape[1] == 1):
+                # 1D case
+                x_flat = x.flatten() if x.ndim == 2 else x
+                if isinstance(A_limits[0], (list, tuple)):
+                    # Multidimensional region specified but data is 1D - use first dimension
+                    min_x, max_x = A_limits[0]
+                else:
+                    # Simple 1D region
+                    min_x, max_x = A_limits
+                mask = (x_flat >= min_x) & (x_flat <= max_x)
+            else:
+                # Multidimensional case
+                if not isinstance(A_limits[0], (list, tuple)):
+                    # Same region for all dimensions
+                    A_limits_expanded = [A_limits] * x.shape[1]
+                else:
+                    A_limits_expanded = A_limits
+                
+                mask = np.ones(len(x), dtype=bool)
+                for i, (min_val, max_val) in enumerate(A_limits_expanded):
+                    mask &= (x[:, i] >= min_val) & (x[:, i] <= max_val)
+            
+            # Apply mask to filter data to target region
+            y_true = y_true[mask]
+            y_pred = y_pred[mask]
+            y_std = y_std[mask]
         
         # Compute calibration curve
         z = np.abs((y_true - y_pred) / y_std)  # standardized absolute residuals
@@ -787,3 +819,110 @@ def visualize_per_kernel_influence(epistemic_influences, title="Per-Kernel Influ
     
     fig.savefig(filepath, bbox_inches='tight', dpi=300)
     plt.close()
+
+
+def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
+    """
+    Plot the evolution of epistemic and aleatoric curvature bounds during sample removal.
+    
+    Args:
+        curvature_history: Dictionary with keys 'm_epi', 'M_ale', 'ratio', 'n_samples'
+        title: Plot title
+    """
+    if not curvature_history or not curvature_history.get('m_epi'):
+        print("No curvature history to plot")
+        return
+    
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, 
+                            figsize=(figsizes.iclr2023(nrows=1, ncols=2.5, height_to_width_ratio=1.0)['figure.figsize'][0], 
+                                    figsizes.iclr2023(nrows=1, ncols=2.5, height_to_width_ratio=1.0)['figure.figsize'][1]))
+    
+    # Define colors matching the reference style
+    colors = {
+        'm_epi': "#1D6996",    # Blue
+        'M_ale': "#CC503E",    # Red
+        'ratio': "#5F4690"     # Purple
+    }
+    
+    n_samples = curvature_history['n_samples']
+    m_epi = curvature_history['m_epi']
+    M_ale = curvature_history['M_ale']
+    ratio = curvature_history['ratio']
+    
+    # Plot 1: m_epi and M_ale on separate y-axes
+    ax1 = axes[0]
+    ax1_twin = ax1.twinx()
+    
+    # Plot m_epi on left y-axis
+    line1 = ax1.plot(n_samples, m_epi, marker='o', markersize=4, 
+                     color=colors['m_epi'], linewidth=1.5, label=r'$m_{\mathrm{epi}}$', 
+                     alpha=0.9)
+    ax1.set_xlabel('Number of Samples')
+    ax1.set_ylabel(r'$m_{\mathrm{epi}}$', color=colors['m_epi'])
+    ax1.tick_params(axis='y', labelcolor=colors['m_epi'])
+    ax1.set_yscale('log')
+    ax1.grid(True, alpha=0.3, linewidth=0.5)
+    
+    # Plot M_ale on right y-axis
+    line2 = ax1_twin.plot(n_samples, M_ale, marker='s', markersize=4, 
+                          color=colors['M_ale'], linewidth=1.5, label=r'$M_{\mathrm{ale}}$', 
+                          alpha=0.9)
+    ax1_twin.set_ylabel(r'$M_{\mathrm{ale}}$', color=colors['M_ale'])
+    ax1_twin.tick_params(axis='y', labelcolor=colors['M_ale'])
+    ax1_twin.set_yscale('log')
+    
+    # Add combined legend
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='best', frameon=False)
+    
+    for spine in ax1.spines.values():
+        spine.set_linewidth(1.25)
+    for spine in ax1_twin.spines.values():
+        spine.set_linewidth(1.25)
+    
+    # Plot 2: Ratio m_epi / M_ale
+    ax2 = axes[1]
+    ax2.plot(n_samples, ratio, marker='D', markersize=4, 
+             color=colors['ratio'], linewidth=1.5, label=r'$m_{\mathrm{epi}}/M_{\mathrm{ale}}$', 
+             alpha=0.9)
+    ax2.set_xlabel('Number of Samples')
+    ax2.set_ylabel(r'$m_{\mathrm{epi}}/M_{\mathrm{ale}}$ (Curvature Ratio)', color=colors['ratio'])
+    ax2.tick_params(axis='y', labelcolor=colors['ratio'])
+    ax2.set_yscale('log')
+    ax2.grid(True, alpha=0.3, linewidth=0.5)
+    ax2.legend(loc='best', frameon=False)
+    ax2.set_ylim(top=10)  # Set upper limit for better visibility
+    
+    # Fill the area above y=1.0 with green to indicate convex region
+    ax2.axhspan(1.0, 10, color='green', alpha=0.1, zorder=0)
+    
+    ax2.axhline(y=1.0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
+
+    # Add "convex" text label slightly above the horizontal line
+    ax2.text(40, 2, 'convex', color='black', fontsize=9, 
+             verticalalignment='bottom')
+    
+    for spine in ax2.spines.values():
+        spine.set_linewidth(1.25)
+    
+    plt.suptitle(title, fontsize=12, y=0.95)
+    plt.tight_layout()
+    
+    # Save the plot
+    filename = title.replace(" ", "_").lower() + '.pdf'
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Curvature bounds plot saved to {filepath}")
+    plt.show()

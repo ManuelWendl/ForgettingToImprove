@@ -39,7 +39,7 @@ experiment:
     [-15.0, 15.0]   # LSTAT
   ]
   num_samples: 506  # Use all available data points
-  num_train_samples: 20
+  num_train_samples: 40
   num_A_samples: 50
   seed: 100
   fixed_kernel: false
@@ -48,6 +48,6 @@ experiment:
   feature_subset: null  # Use all 13 features
   kernel:
     - type: rbf
-      length_scale: 1.0
+      length_scale: 0.1
     - type: white
-      noise_level: 0.1
+      noise_level: 0.01

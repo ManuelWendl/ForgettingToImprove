@@ -16,14 +16,18 @@ CONFIG_DIR="forgetting_to_improve/forgetfull_bayesian_optimization/configs"
 
 # Array of config files to run
 CONFIGS=(
-    "ackley_2d.yaml",
-    "ackley_6d.yaml",
-    "branin.yaml",
-    "griewank.yaml",
-    "hartmann_6d.yaml",
-    "holder_table.yaml",
-    "levy.yaml",
-    "rosenbrock.yaml",
+    # "ackley_2d.yaml"
+    # "ackley_6d.yaml"
+    # "branin.yaml"
+    # "griewank.yaml"
+    # "hartmann_6d.yaml"
+    # "holder_table.yaml"
+    # "levy.yaml"
+    "rosenbrock.yaml"
+    "augmented_rosenbrock.yaml"
+    # "six_hump_camel.yaml"
+    # "styblinski_tang_2d.yaml"
+    # "styblinski_tang_4d.yaml"
 )
 
 # Start time

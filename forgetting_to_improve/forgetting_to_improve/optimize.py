@@ -1,10 +1,11 @@
 import torch
 import gpytorch
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
 from .uncertainty import (
     calculate_uncertainty_influence,
     calculate_aleatoric_hessian,
 )
+from .curvature_bounds import calculate_curvature_bounds
 from .helper.plot_gp import visualize_hessian
 
 
@@ -58,8 +59,10 @@ def sequentially_optimize_samples(
     x_test: torch.Tensor,
     max_iter: int = 20,
     noise_type: str = 'joint',
-    show_hessian: bool = False
-) -> Tuple[torch.Tensor, torch.Tensor, list]:
+    show_hessian: bool = False,
+    calculate_convexity: bool = False,
+    A_limits: Tuple = None
+) -> Tuple[torch.Tensor, torch.Tensor, List, Dict]:
     """
     Optimize the training samples by removing those that negatively impact the GP model.
     
@@ -72,13 +75,31 @@ def sequentially_optimize_samples(
         max_iter: Maximum iterations
         noise_type: Type of uncertainty to consider
         show_hessian: Whether to visualize Hessian (only for 1D)
+        calculate_convexity: Whether to compute curvature bounds m_epi and M_ale
+        A_limits: Region limits for curvature bound calculation (required if calculate_convexity=True)
         
     Returns:
         x_samples: Optimized training inputs
         y_samples: Optimized training targets
         deleted_x_samples: List of removed samples
+        curvature_history: Dictionary with 'm_epi' and 'M_ale' lists (empty if calculate_convexity=False)
     """
     deleted_x_samples = []
+    curvature_history = {'m_epi': [], 'M_ale': [], 'ratio': [], 'n_samples': []}
+    
+    # Compute initial curvature bounds if requested
+    if calculate_convexity:
+        if A_limits is None:
+            raise ValueError("A_limits must be provided when calculate_convexity=True")
+        try:
+            m_epi, M_ale = calculate_curvature_bounds(model, x_samples, y_samples, A_limits)
+            curvature_history['m_epi'].append(m_epi)
+            curvature_history['M_ale'].append(M_ale)
+            curvature_history['ratio'].append(m_epi / M_ale if M_ale > 0 else float('inf'))
+            curvature_history['n_samples'].append(len(x_samples))
+            print(f"Initial: n_samples={len(x_samples)}, m_epi={m_epi:.6e}, M_ale={M_ale:.6e}, ratio={m_epi/M_ale:.6e}")
+        except Exception as e:
+            print(f"Warning: Could not compute initial curvature bounds: {e}")
     
     for iteration in range(max_iter):
         index_to_remove, epistemic, aleatoric = select_worst_sample(
@@ -116,8 +137,20 @@ def sequentially_optimize_samples(
         model.set_train_data(x_samples, y_samples, strict=False)
         model.train()
         likelihood.train()
+        
+        # Compute curvature bounds after removal if requested
+        if calculate_convexity:
+            try:
+                m_epi, M_ale = calculate_curvature_bounds(model, x_samples, y_samples, A_limits)
+                curvature_history['m_epi'].append(m_epi)
+                curvature_history['M_ale'].append(M_ale)
+                curvature_history['ratio'].append(m_epi / M_ale if M_ale > 0 else float('inf'))
+                curvature_history['n_samples'].append(len(x_samples))
+                print(f"Iter {iteration+1}: n_samples={len(x_samples)}, m_epi={m_epi:.6e}, M_ale={M_ale:.6e}, ratio={m_epi/M_ale:.6e}")
+            except Exception as e:
+                print(f"Warning: Could not compute curvature bounds at iteration {iteration+1}: {e}")
     
-    return x_samples, y_samples, deleted_x_samples
+    return x_samples, y_samples, deleted_x_samples, curvature_history
 
 
 def batch_optimize_samples(

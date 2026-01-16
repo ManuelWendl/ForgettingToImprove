@@ -242,9 +242,9 @@ def initialize_heteroscedastic_gp_model(
     if train_y.ndim > 1:
         train_y = train_y.squeeze(-1)
     
-    # Add standard BoTorch priors to mean kernel for [0,1] normalized inputs
+    # Add LogNormal(0,1) prior to mean kernel lengthscale
     if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
-        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 6.0)
+        mean_kernel.base_kernel.lengthscale_prior = LogNormalPrior(0, 1)
         mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
     if not hasattr(mean_kernel, 'outputscale_prior'):
         mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
@@ -327,12 +327,12 @@ def initialize_modulating_surrogates_model(
     n_train, n_dims = train_x_double.shape
     
     # Create Matern kernel with ARD for augmented space (d + latent_dim dimensions)
-    # Standard BoTorch priors for [0,1] normalized inputs
+    # LogNormal(0,1) prior for lengthscale
     latent_dim = 1  # One latent variable per training point
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
         ard_num_dims=n_dims + latent_dim,  # +latent_dim for the latent variables
-        lengthscale_prior=GammaPrior(3.0, 6.0),
+        lengthscale_prior=LogNormalPrior(0, 1),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
     

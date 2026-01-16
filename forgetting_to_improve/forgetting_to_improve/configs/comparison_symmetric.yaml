@@ -1,6 +1,6 @@
 experiment:
   type: single
-  method: sequential
+  method: [none, sequential]
   objective: sin_symmetric_lengthscale_increase
   noise: joint
   A_limits: [-3, 3]
@@ -12,9 +12,8 @@ experiment:
   fixed_kernel: true
   show_plots: true
   show_hessian: false
-  calculate_convexity: true
-kernel_config:
+  kernel:
   - type: 'rbf'
     length_scale: 1.0
   - type: white
-    noise_level: 0.1
+    noise_level: 0.01
