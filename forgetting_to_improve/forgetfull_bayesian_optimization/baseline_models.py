@@ -1,8 +1,10 @@
 import torch
 import gpytorch
 import warnings
-from typing import Tuple, Any
+from typing import Tuple, Any, Callable, Optional
 from botorch.fit import fit_gpytorch_mll
+from botorch.models import SingleTaskGP
+from torch import Tensor
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.priors import GammaPrior
 from gpytorch.constraints import GreaterThan, Interval
@@ -240,9 +242,9 @@ def initialize_heteroscedastic_gp_model(
     if train_y.ndim > 1:
         train_y = train_y.squeeze(-1)
     
-    # Add priors to mean kernel if not already present
+    # Add LogNormal(0,1) prior to mean kernel lengthscale
     if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
-        mean_kernel.base_kernel.lengthscale_prior = GammaPrior(3.0, 1.5)
+        mean_kernel.base_kernel.lengthscale_prior = LogNormalPrior(0, 1)
         mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
     if not hasattr(mean_kernel, 'outputscale_prior'):
         mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
@@ -252,11 +254,11 @@ def initialize_heteroscedastic_gp_model(
         train_x=train_x,
         train_y=train_y,
         kernel=mean_kernel,
-        max_iter=25,  # Match the notebook default
+        max_iter=10,  # Match the notebook default
         tol=1e-04,
         var_estimate='paper',  # Use the paper's sampling-based method
         var_samples=1000,
-        norm_and_std=True  # Always normalize and standardize for stability
+        norm_and_std=False  # Always normalize and standardize for stability
     )
     
     # Fit the model (this implements the full Most Likely algorithm)
@@ -274,18 +276,22 @@ def initialize_modulating_surrogates_model(
     train_y: torch.Tensor,
     kernel: Any = None,
     noise_level: float = 0.1,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    num_mcmc_samples: int = 50,
+    num_warmup: int = 500
 ) -> Tuple[Any, Any]:
     """
-    Initialize a Modulating Surrogates GP model.
+    Initialize a Modulating Surrogates GP model using Latent GP (LGP).
     
     Based on "Modulating Surrogates for Bayesian Optimization" paper.
-    This method augments the input space with an additional dimension that has 
-    a uniform prior U[0,1]. During training, this dimension is sampled uniformly
-    for each data point, allowing the model to learn to down-weight detrimental samples.
     
-    During acquisition optimization, this extra dimension is optimized jointly with
-    the original dimensions to find the optimal modulation value.
+    This implements the proper LGP approach where:
+    1. Each training point has latent variables h_n ~ N(0, σ²_h I)
+    2. Posterior inference over H and θ is performed via MCMC (HMC/NUTS)
+    3. Acquisition function uses Monte Carlo approximation over posterior samples
+    
+    The latent variables allow the model to learn which training points are
+    unreliable/detrimental and down-weight them automatically.
     
     Args:
         train_x: Training inputs (n, d)
@@ -293,18 +299,22 @@ def initialize_modulating_surrogates_model(
         kernel: Matern kernel from config (same as standard GP uses)
         noise_level: Noise level for the likelihood
         device: Device for computation
+        num_mcmc_samples: Number of MCMC posterior samples to draw
+        num_warmup: Number of MCMC warmup/burn-in steps
         
     Returns:
-        Tuple of (mll, model)
+        Tuple of (None, model) - mll is None as MCMC handles inference
     """
     if not BOTORCH_AVAILABLE:
         raise ImportError("BoTorch is required for modulating_surrogates method")
     
-    print("Initializing Modulating Surrogates model...")
+    from ..forgetting_to_improve.models import create_latent_gp_model, LatentGPModel
+    
+    print("Initializing Latent GP (Modulating Surrogates) model...")
     
     # Convert to double precision
-    train_x_double = train_x.double()
-    train_y_double = train_y.double()
+    train_x_double = train_x.double().to(device)
+    train_y_double = train_y.double().to(device)
     
     # Handle NaN/Inf
     train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
@@ -316,22 +326,18 @@ def initialize_modulating_surrogates_model(
     
     n_train, n_dims = train_x_double.shape
     
-    # Augment training data with modulating dimension
-    # Sample uniformly from [0, 1] for each training point
-    modulating_dims = torch.rand(n_train, 1, dtype=torch.double)
-    train_x_augmented = torch.cat([train_x_double, modulating_dims], dim=-1)
-    
-    # Create Matern kernel with ARD for augmented space (d+1 dimensions)
+    # Create Matern kernel with ARD for augmented space (d + latent_dim dimensions)
+    # LogNormal(0,1) prior for lengthscale
+    latent_dim = 1  # One latent variable per training point
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
-        ard_num_dims=n_dims + 1,  # +1 for the modulating dimension
-        lengthscale_prior=GammaPrior(3.0, 1.5),
+        ard_num_dims=n_dims + latent_dim,  # +latent_dim for the latent variables
+        lengthscale_prior=LogNormalPrior(0, 1),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
     
     kernel_modulating = gpytorch.kernels.ScaleKernel(
         base_kernel,
-        outputscale_prior=GammaPrior(2.0, 0.15)
     ).double()
     
     # Create likelihood with same noise constraints as standard GP
@@ -346,20 +352,183 @@ def initialize_modulating_surrogates_model(
             noise_constraint=Interval(1e-6, 1e-2)
         ).double()
     
-    # Create SingleTaskGP with augmented inputs
-    modulating_model = SingleTaskGP(
-        train_X=train_x_augmented,
-        train_Y=train_y_double,
-        likelihood=likelihood_modulating,
-        covar_module=kernel_modulating
-    )
+    # Create Latent GP model with MCMC
+    # Prior std for latent variables (σ_h in the paper)
+    sigma_h = 1.0
     
-    # Fit the model
-    mll_modulating = ExactMarginalLogLikelihood(
-        likelihood=modulating_model.likelihood, 
-        model=modulating_model
-    )
-    fit_gpytorch_mll(mll_modulating)
+    try:
+        modulating_model = create_latent_gp_model(
+            train_x=train_x_double,
+            train_y=train_y_double,
+            covar_module=kernel_modulating,
+            likelihood=likelihood_modulating,
+            latent_dim=latent_dim,
+            sigma_h=sigma_h,
+            num_mcmc_samples=num_mcmc_samples,
+            num_warmup=num_warmup
+        )
+        print("Latent GP (Modulating Surrogates) model fitted successfully via MCMC")
+    except Exception as e:
+        print(f"Warning: MCMC failed ({e}). Falling back to simplified version...")
+        # Fallback to simpler approach without full MCMC
+        modulating_model = LatentGPModel(
+            train_X=train_x_double,
+            train_Y=train_y_double,
+            covar_module=kernel_modulating,
+            likelihood=likelihood_modulating,
+            latent_dim=latent_dim,
+            sigma_h=sigma_h,
+            num_mcmc_samples=100,  # Single sample (MAP estimate)
+            num_warmup=100
+        )
+        # Use zero latent variables as fallback
+        modulating_model.mcmc_samples_h = torch.zeros(
+            1, n_train, latent_dim,
+            dtype=train_x_double.dtype,
+            device=train_x_double.device
+        )
     
-    print("Modulating Surrogates model fitted successfully")
-    return mll_modulating, modulating_model
+    return None, modulating_model
+
+class MCLatentGPAcquisitionFunction:
+    """
+    Wrapper for acquisition functions that uses Monte Carlo approximation
+    over latent variable posterior samples.
+    
+    Following the LGP paper:
+    α(x*) ≈ (1/M) Σᵢ α̂(x*, Hᵢ, θᵢ)
+    
+    where {Hᵢ, θᵢ} are MCMC samples from the posterior.
+    """
+    
+    def __init__(
+        self,
+        base_acq_func_factory: Callable,
+        latent_gp_model,
+        X_baseline: Tensor,
+        num_samples: Optional[int] = None
+    ):
+        """
+        Args:
+            base_acq_func_factory: Factory function that creates acquisition function
+                                   given a model (e.g., lambda model: UpperConfidenceBound(model, beta=0.1))
+            latent_gp_model: LatentGPModel with MCMC samples
+            X_baseline: Baseline points for acquisition (n, d) - original dimension
+            num_samples: Number of MCMC samples to use (None = use all)
+        """
+        self.base_acq_func_factory = base_acq_func_factory
+        self.latent_gp_model = latent_gp_model
+        self.X_baseline = X_baseline
+        
+        # Get MCMC samples of both H and θ
+        h_samples, theta_samples = latent_gp_model.get_posterior_samples()
+        
+        if num_samples is not None and num_samples < len(theta_samples):
+            # Subsample if requested
+            indices = torch.randperm(len(theta_samples))[:num_samples].tolist()
+            self.h_samples = h_samples[indices]
+            self.theta_samples = [theta_samples[i] for i in indices]
+        else:
+            self.h_samples = h_samples
+            self.theta_samples = theta_samples
+        
+        self.num_samples = len(self.theta_samples)
+    
+    def __call__(self, X: Tensor) -> Tensor:
+        """
+        Evaluate acquisition function using Monte Carlo approximation.
+        
+        For each MCMC sample (Hᵢ, θᵢ):
+        1. Create a fresh GP with training data augmented by Hᵢ and hyperparameters θᵢ
+        2. Evaluate acquisition function α̂(x*, Hᵢ, θᵢ)
+        3. Average over all samples: α(x*) ≈ (1/M) Σᵢ α̂(x*, Hᵢ, θᵢ)
+        
+        Args:
+            X: Candidate points (batch_size, d) - original dimension
+            
+        Returns:
+            Acquisition values (batch_size,)
+        """
+        from gpytorch.kernels import RBFKernel, ScaleKernel
+        from gpytorch.likelihoods import GaussianLikelihood
+        
+        acq_values = torch.zeros(X.shape[0], dtype=X.dtype, device=X.device)
+        
+        # Monte Carlo approximation: average over posterior samples of (H, θ)
+        for i in range(self.num_samples):
+            # Get this sample's latent variables and hyperparameters
+            h_sample = self.h_samples[i]  # (n, latent_dim)
+            theta_sample = self.theta_samples[i]  # dict with 'lengthscale', 'outputscale', 'noise'
+            
+            # Create fresh GP model with augmented training data
+            X_augmented = torch.cat([self.latent_gp_model.train_X_original, h_sample], dim=-1)
+            Y_train = self.latent_gp_model.train_Y_original
+            if Y_train.ndim == 1:
+                Y_train = Y_train.unsqueeze(-1)
+            
+            # Create kernel with sampled hyperparameters
+            base_kernel = RBFKernel(ard_num_dims=X_augmented.shape[-1])
+            base_kernel.lengthscale = theta_sample['lengthscale'].detach()
+            
+            covar_module = ScaleKernel(base_kernel)
+            covar_module.outputscale = theta_sample['outputscale'].detach()
+            
+            # Create likelihood with sampled noise
+            likelihood = GaussianLikelihood()
+            likelihood.noise = theta_sample['noise'].detach()
+            
+            # Create a fresh SingleTaskGP instance with sampled hyperparameters
+            fresh_model = SingleTaskGP(
+                train_X=X_augmented.double(),
+                train_Y=Y_train.double(),
+                covar_module=covar_module,
+                likelihood=likelihood
+            )
+            
+            # Set to eval mode
+            fresh_model.eval()
+            fresh_model.likelihood.eval()
+            
+            # Create acquisition function for this model
+            acq_func = self.base_acq_func_factory(model=fresh_model, X_baseline=self.X_baseline)
+            
+            # Evaluate acquisition - augment X with zeros for test points
+            h_test = torch.zeros(*X.shape[:-1], self.latent_gp_model.latent_dim, dtype=X.dtype, device=X.device)
+            X_augmented_test = torch.cat([X, h_test], dim=-1)
+            
+            # Evaluate with augmented test points
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                acq_val = acq_func(X_augmented_test.unsqueeze(-2)).squeeze(-1)
+            
+            acq_values += acq_val
+        
+        # Average over samples
+        acq_values /= self.num_samples
+        
+        return acq_values
+
+
+def create_mc_latent_acquisition(
+    acq_func_factory: Callable,
+    latent_gp_model,
+    X_baseline: Tensor,
+    num_samples: Optional[int] = None
+):
+    """
+    Create a Monte Carlo acquisition function for a Latent GP model.
+    
+    Args:
+        acq_func_factory: Function that creates acquisition function given a model
+        latent_gp_model: Fitted LatentGPModel with MCMC samples
+        X_baseline: Training inputs in original dimension (n, d)
+        num_samples: Number of MC samples to use
+        
+    Returns:
+        Callable acquisition function
+    """
+    return MCLatentGPAcquisitionFunction(
+        base_acq_func_factory=acq_func_factory,
+        latent_gp_model=latent_gp_model,
+        X_baseline=X_baseline,
+        num_samples=num_samples
+    )

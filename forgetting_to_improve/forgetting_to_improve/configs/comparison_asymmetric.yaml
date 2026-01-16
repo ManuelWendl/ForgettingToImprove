@@ -1,20 +1,19 @@
 experiment:
   type: single
-  method: sequential
-  objective: sin_symmetric_lengthscale_increase
+  method: [none, sequential]
+  objective: sin_asymmetric_lengthscale_increase
   noise: joint
   A_limits: [-3, 3]
   X_limits: [-10, 10]
   num_samples: 1000
   num_train_samples: 20
   num_A_samples: 50
-  seed: 0
+  seed: 4
   fixed_kernel: true
   show_plots: true
   show_hessian: false
-  calculate_convexity: true
-kernel_config:
+  kernel:
   - type: 'rbf'
     length_scale: 1.0
   - type: white
-    noise_level: 0.1
+    noise_level: 0.01

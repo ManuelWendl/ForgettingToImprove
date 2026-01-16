@@ -1,7 +1,10 @@
 import torch
 import warnings
+import gpytorch
+import time
 from botorch import fit_gpytorch_mll
 from botorch.utils.sampling import draw_sobol_samples
+from botorch.utils.transforms import normalize, unnormalize
 from .opti_aquisition import get_optimize_acqf_and_get_observation
 from .target_region import TargetRegion
 from .filter_samples import filter_samples
@@ -9,9 +12,9 @@ from .baseline_models import (
     initialize_relevance_pursuit_model,
     initialize_warped_gp_model,
     initialize_heteroscedastic_gp_model,
-    initialize_modulating_surrogates_model
+    initialize_modulating_surrogates_model,
+    create_mc_latent_acquisition
 )
-
 
 def get_optimization_loop(
         aq_func, 
@@ -39,30 +42,47 @@ def get_optimization_loop(
 
     def optimization_loop(num_iters, seed):
         """Runs the Bayesian optimization loop."""
+        # Normalize bounds to [0, 1] hypercube for consistent GP priors
+        # Store original bounds for denormalization
+        original_bounds = global_bounds
+        normalized_bounds = torch.stack([
+            torch.zeros(global_bounds.shape[1], dtype=global_bounds.dtype, device=global_bounds.device),
+            torch.ones(global_bounds.shape[1], dtype=global_bounds.dtype, device=global_bounds.device)
+        ])
+        
+        # Wrap objective function to handle denormalization
+        def normalized_obj(x_norm):
+            """Evaluate objective at normalized inputs by denormalizing first."""
+            x_original = unnormalize(x_norm, original_bounds)
+            return obj(x_original)
+        
         optimize_acqf_and_get_observation = get_optimize_acqf_and_get_observation(
             num_restarts=num_restarts,
             raw_samples=raw_samples,
-            obj=obj,
+            obj=normalized_obj,  # Use wrapped objective
             obs_noise=obs_noise,
         )
 
+        # Sample in normalized [0,1] space
         train_x = draw_sobol_samples(
-            bounds=global_bounds, n=n_initial_samples, q=1, seed=seed
+            bounds=normalized_bounds, n=n_initial_samples, q=1, seed=seed
         ).squeeze(1)
-        exact_obj = obj(train_x).unsqueeze(-1)  # add output dimension
+        exact_obj = normalized_obj(train_x).unsqueeze(-1)  # add output dimension
 
         best_observed_value = exact_obj.max().item()
         best_observed = [best_observed_value]
         train_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
 
-        # Initial model
-        mll, model = initialize_model(train_x, train_obj, global_bounds)
+        # Initial model - pass normalized bounds
+        mll, model = initialize_model(train_x, train_obj, normalized_bounds)
 
         if algorithm:
             print(f"Using optimization algorithm: {algorithm}" + 
                   (f" with method: {method}" if not is_baseline_method else " (baseline)"))
         
+        iteration_times = []
         for i in range(1, num_iters + 1):
+            iteration_start_time = time.time()
             # Handle baseline methods
             if algorithm == 'relevance_pursuit':
                 # Reinitialize with relevance pursuit
@@ -81,12 +101,11 @@ def get_optimization_loop(
                     kernel=None,  # Create fresh kernel, don't use pre-optimized one
                     noise_level=noise_level,
                     device=train_x.device,
-                    global_bounds=global_bounds
+                    global_bounds=normalized_bounds
                 )
             
             elif algorithm == 'heteroscedastic_gp':
                 # Create fresh kernel for each iteration
-                import gpytorch
                 n_dims = train_x.shape[-1]
                 fresh_kernel = gpytorch.kernels.ScaleKernel(
                     gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=n_dims)
@@ -112,7 +131,7 @@ def get_optimization_loop(
             
             # Handle forgetting-based methods
             elif algorithm in ['joint', 'epistemic']:
-                target_region = TargetRegion(global_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
+                target_region = TargetRegion(normalized_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
                 
                 # Filter samples
                 filtered_x_samples, filtered_y_samples, _ = filter_samples(
@@ -125,15 +144,15 @@ def get_optimization_loop(
                     method=method,
                     min_samples=min_samples,
                     initialize_model=initialize_model,
-                    global_bounds=global_bounds,
+                    global_bounds=normalized_bounds,
                 )
                 
                 # Reinitialize model with filtered samples
-                mll, model = initialize_model(filtered_x_samples, filtered_y_samples, global_bounds)
+                mll, model = initialize_model(filtered_x_samples, filtered_y_samples, normalized_bounds)
             
             else:
                 # No special handling (algorithm == 'none')
-                mll, model = initialize_model(train_x, train_obj, global_bounds)
+                mll, model = initialize_model(train_x, train_obj, normalized_bounds)
             
             # Fit model (skip for heteroscedastic as it's already fitted)
             if algorithm != 'heteroscedastic_gp':
@@ -152,11 +171,18 @@ def get_optimization_loop(
             
             # Create acquisition function
             if algorithm == 'modulating_surrogates':
-                # For modulating surrogates, augment X_baseline with random modulating values
-                n_train = train_x.shape[0]
-                modulating_dims = torch.rand(n_train, 1, dtype=train_x.dtype, device=train_x.device)
-                train_x_augmented = torch.cat([train_x, modulating_dims], dim=-1)
-                aq = aq_func(model=model, X_baseline=train_x_augmented)
+                # For modulating surrogates (Latent GP), use Monte Carlo acquisition
+                # Average acquisition function over posterior samples of latent variables
+                try:
+                    aq = create_mc_latent_acquisition(
+                        acq_func_factory=aq_func,
+                        latent_gp_model=model,
+                        X_baseline=train_x,  # Original dimension, no augmentation needed
+                        num_samples=None  # Use all MCMC samples
+                    )
+                except Exception as e:
+                    print(f"Warning: Failed to create MC acquisition ({e}), using standard acquisition")
+                    aq = aq_func(model=model, X_baseline=train_x)
             else:
                 aq = aq_func(model=model, X_baseline=train_x)
 
@@ -176,31 +202,29 @@ def get_optimization_loop(
                         new_x = candidate_x
                         new_acqvalue = candidate_acqvalue
             elif algorithm == 'modulating_surrogates':
-                # For modulating surrogates, optimize over augmented space
-                # Augment global bounds with [0, 1] for the modulating dimension
-                augmented_bounds = torch.cat([
-                    global_bounds,
-                    torch.tensor([[0.0], [1.0]], dtype=global_bounds.dtype, device=global_bounds.device)
-                ], dim=1)
-                new_x_aug, new_acqvalue = optimize_acqf_and_get_observation(aq, augmented_bounds)
-                # Remove the modulating dimension from the candidate for objective evaluation
-                new_x = new_x_aug[:, :-1]
+                # For modulating surrogates (Latent GP), optimize in normalized space
+                # The latent variables are marginalized out via Monte Carlo in the acquisition function
+                new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, normalized_bounds)
             else:
-                # Use global bounds for baseline methods or no algorithm
-                new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, global_bounds)
+                # Use normalized bounds for baseline methods or no algorithm
+                new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, normalized_bounds)
 
-            # Evaluate objective and add to training data
-            exact_obj = obj(new_x).unsqueeze(-1)
+            # Evaluate objective and add to training data (new_x is in normalized space)
+            exact_obj = normalized_obj(new_x).unsqueeze(-1)
             new_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
             train_x = torch.cat([train_x, new_x])
             train_obj = torch.cat([train_obj, new_obj])
 
-            # update progress
-            best_value = obj(train_x).max().item()
+            # update progress - evaluate at denormalized points
+            train_x_original = unnormalize(train_x, original_bounds)
+            best_value = obj(train_x_original).max().item()
             best_observed.append(best_value)
+            
+            iteration_time = time.time() - iteration_start_time
+            iteration_times.append(iteration_time)
             
             print(f"Iteration {i}: Best observed value = {best_value}")
         
-        return train_x, train_obj, best_observed
+        return train_x, train_obj, best_observed, iteration_times
 
     return optimization_loop

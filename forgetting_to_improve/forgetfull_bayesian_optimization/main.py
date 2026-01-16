@@ -53,7 +53,7 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
         
         # Run experiments
         print("\nRunning experiments...")
-        best_observed_all = run_experiment(
+        best_observed_all, iteration_times_all = run_experiment(
             aq_func=acq_func,
             obj=obj_func,
             initialize_model=initialize_model,
@@ -69,7 +69,7 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
 
         # Compute statistics
         print("\nComputing statistics...")
-        stats = compute_statistics(best_observed_all, optimal_value)
+        stats = compute_statistics(best_observed_all, optimal_value, iteration_times_all)
         
         results[a] = stats
 

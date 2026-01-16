@@ -15,6 +15,7 @@ def run_experiment(
     ):
     """Runs a full Bayesian optimization experiment."""
     best_observed_all = []
+    iteration_times_all = []
     for seed in range(num_seeds):
         optimization_loop = get_optimization_loop(
             aq_func=aq_func,
@@ -28,8 +29,9 @@ def run_experiment(
             opti_options=opti_options,
         )
         
-        _, _, best_observed = optimization_loop(num_iters, seed)
+        _, _, best_observed, iteration_times = optimization_loop(num_iters, seed)
         best_observed_all.append(best_observed)
+        iteration_times_all.append(iteration_times)
     
-    return best_observed_all
+    return best_observed_all, iteration_times_all
     

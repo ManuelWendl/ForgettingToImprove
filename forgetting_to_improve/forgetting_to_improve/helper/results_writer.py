@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Any, List
 from datetime import datetime
+import numpy as np
 
 class ResultsWriter:
     """Write experiment results to text files."""
@@ -88,10 +89,12 @@ class ResultsWriter:
             for variant, results in all_results.items():
                 f.write(f"{variant:<20}")
                 if isinstance(results, dict) and 'mean' in results:
-                    # Statistical results
+                    # Statistical results with mean ± std
                     for metric in all_metrics:
                         if metric in results['mean']:
-                            f.write(f"{results['mean'][metric]:>15.6f}")
+                            mean_val = results['mean'][metric]
+                            std_val = results.get('std', {}).get(metric, 0)
+                            f.write(f"{mean_val:>7.3f} ± {std_val:<6.3f}")
                         else:
                             f.write(f"{'N/A':>15}")
                 else:
@@ -124,12 +127,25 @@ class ResultsWriter:
                         for metric in all_metrics:
                             f.write(f"{'N/A':>15}")
                     f.write("\n")
+                
+                # Add runtime summary if available
+                if any('Runtime' in results.get('mean', {}) for results in all_results.values()):
+                    f.write("\n=== Runtime Summary (seconds) ===\n")
+                    f.write(f"{'Variant':<20}{'Mean':>12}{'Std':>12}{'Min':>12}{'Max':>12}\n")
+                    f.write("-" * 68 + "\n")
+                    for variant, results in all_results.items():
+                        if isinstance(results, dict) and 'Runtime' in results.get('mean', {}):
+                            mean_runtime = results['mean']['Runtime']
+                            std_runtime = results.get('std', {}).get('Runtime', 0)
+                            min_runtime = results.get('min', {}).get('Runtime', 0)
+                            max_runtime = results.get('max', {}).get('Runtime', 0)
+                            f.write(f"{variant:<20}{mean_runtime:>12.4f}{std_runtime:>12.4f}{min_runtime:>12.4f}{max_runtime:>12.4f}\n")
         
         print(f"Comparison results written to: {filepath}")
         return filepath
     
     def aggregate_statistical_results(self, results_list: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
-        """Aggregate results from multiple seeds into mean and min statistics."""
+        """Aggregate results from multiple seeds into mean, std, min, and max statistics."""
         if not results_list:
             return {}
         
@@ -138,12 +154,14 @@ class ResultsWriter:
         for result in results_list:
             all_metrics.update(result.keys())
         
-        aggregated = {'mean': {}, 'min': {}}
+        aggregated = {'mean': {}, 'std': {}, 'min': {}, 'max': {}}
         
         for metric in all_metrics:
             values = [result.get(metric, 0) for result in results_list if metric in result]
             if values:
-                aggregated['mean'][metric] = sum(values) / len(values)
+                aggregated['mean'][metric] = np.mean(values)
+                aggregated['std'][metric] = np.std(values)
                 aggregated['min'][metric] = min(values)
+                aggregated['max'][metric] = max(values)
         
         return aggregated

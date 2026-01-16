@@ -58,6 +58,19 @@ def save_results(results: Dict[str, Any], config: Dict[str, Any], results_path: 
             f.write(f"Median: {stats['best_values']['median'][-1]:.6f}\n")
             f.write(f"Min: {stats['best_values']['min'][-1]:.6f}\n")
             f.write(f"Max: {stats['best_values']['max'][-1]:.6f}\n\n")
+            
+            # Add timing statistics if available
+            if 'timing' in stats:
+                f.write("-" * 80 + "\n")
+                f.write("Timing Statistics (per iteration):\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"Mean time per iteration: {stats['timing']['mean']:.4f} seconds\n")
+                f.write(f"Std: {stats['timing']['std']:.4f} seconds\n")
+                f.write(f"Median: {stats['timing']['median']:.4f} seconds\n")
+                f.write(f"Min: {stats['timing']['min']:.4f} seconds\n")
+                f.write(f"Max: {stats['timing']['max']:.4f} seconds\n")
+                f.write(f"Total time: {stats['timing']['total']:.2f} seconds\n")
+                f.write(f"Average total time per seed: {stats['timing']['per_seed_mean']:.2f} seconds\n\n")
         
         # Add comparison section if multiple methods
         if len(results) > 1:
@@ -147,13 +160,15 @@ def load_learning_history(results_path: str) -> Dict[str, Any]:
 
 
 
-def compute_statistics(all_results: List[List[float]], optimal_value: float) -> Dict[str, Any]:
+def compute_statistics(all_results: List[List[float]], optimal_value: float, 
+                      all_iteration_times: List[List[float]] = None) -> Dict[str, Any]:
     """
     Compute statistics across multiple random seeds.
     
     Args:
         all_results: List of best observed values for each seed
         optimal_value: Optimal value of the objective
+        all_iteration_times: List of iteration times for each seed (optional)
         
     Returns:
         Dictionary containing statistics
@@ -194,6 +209,22 @@ def compute_statistics(all_results: List[List[float]], optimal_value: float) -> 
             'max': np.max(all_best_values, axis=0),
         }
     }
+    
+    # Add timing statistics if available
+    if all_iteration_times is not None and len(all_iteration_times) > 0:
+        all_times = np.array(all_iteration_times)
+        # Flatten to get all times across seeds and iterations
+        all_times_flat = all_times.flatten()
+        
+        stats['timing'] = {
+            'mean': np.mean(all_times_flat),
+            'std': np.std(all_times_flat),
+            'median': np.median(all_times_flat),
+            'min': np.min(all_times_flat),
+            'max': np.max(all_times_flat),
+            'total': np.sum(all_times_flat),
+            'per_seed_mean': np.mean(np.sum(all_times, axis=1)),  # Average total time per seed
+        }
     
     return stats
 

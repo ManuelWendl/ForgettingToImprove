@@ -59,7 +59,7 @@ def filter_samples(
             # Store initial count to check if a sample was removed
             initial_count = x_samples.shape[0]
             
-            x_samples, y_samples, deleted_x_samples = sequentially_optimize_samples(
+            x_samples, y_samples, deleted_x_samples, _ = sequentially_optimize_samples(
                 model=model,
                 likelihood=mll.likelihood,
                 x_samples=x_samples,
