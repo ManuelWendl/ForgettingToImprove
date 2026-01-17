@@ -63,6 +63,19 @@ def get_optimization_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return config.get('sample_optimization', {})
 
 
+def get_perturbation_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract perturbation configuration for noise corruption.
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Dictionary with perturbation parameters (type, probability, value)
+    """
+    return config.get('perturbation', {})
+
+
 def validate_config(config: Dict[str, Any]) -> None:
     """
     Validate that required configuration parameters are present.

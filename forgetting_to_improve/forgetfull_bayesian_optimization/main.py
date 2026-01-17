@@ -1,6 +1,6 @@
 import argparse
 
-from .helper.read_config import read_config, get_acquisition_config, get_optimization_config, validate_config
+from .helper.read_config import read_config, get_acquisition_config, get_optimization_config, get_perturbation_config, validate_config
 from .run_experiment import run_experiment
 from .helper.plotting import plot_results
 from .helper.result_writer import save_results, save_learning_history, compute_statistics
@@ -37,6 +37,9 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
     
     # Get optimization configuration
     opti_options = get_optimization_config(config)
+    
+    # Get perturbation configuration
+    perturbation_config = get_perturbation_config(config)
 
     algorithm = opti_options.get('algorithm', None)
     if not isinstance(algorithm, list):
@@ -62,6 +65,7 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
             obs_noise=0.0,  # Noise-free observations by default
             n_initial_samples=config.get('init_points', 0) if config.get('init_points', 0) > 0 else 5,
             global_bounds=bounds,
+            perturbation_config=perturbation_config if perturbation_config else None,
             num_iters=config['n_iter'],
             num_seeds=config['n_seeds'],
             opti_options=opti_options if opti_options else None,

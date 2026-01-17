@@ -492,3 +492,260 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
     plt.close()
     
     print(f"Combined plots saved to {plot_path}")
+
+
+def plot_runtime_statistics(results: Dict[str, Any], config: Dict[str, Any], plot_path: str) -> None:
+    """
+    Create bar plot of runtime statistics for each method.
+    
+    Args:
+        results: Results dictionary with method names as keys and statistics as values
+        config: Configuration dictionary
+        plot_path: Directory path to save plots
+    """
+    # Apply ICLR 2023 styling
+    _apply_iclr_style()
+    
+    Path(plot_path).mkdir(parents=True, exist_ok=True)
+    colors = _get_color_palette()
+    
+    # Get methods from results, with 'joint' (Forgetful BO) first
+    methods = list(results.keys())
+    if 'joint' in methods:
+        methods.remove('joint')
+        methods.insert(0, 'joint')
+    
+    # Check if timing data is available
+    has_timing = all('timing' in results[method] for method in methods)
+    if not has_timing:
+        print("Warning: No timing data available in results")
+        return
+    
+    # Extract timing statistics
+    mean_times = []
+    std_times = []
+    min_times = []
+    max_times = []
+    method_labels = []
+    
+    for method in methods:
+        timing = results[method]['timing']
+        mean_times.append(timing['mean'])
+        std_times.append(timing['std'])
+        min_times.append(timing['min'])
+        max_times.append(timing['max'])
+        
+        # Create nice label
+        if method == 'none':
+            method_labels.append('Homoscedastic\nGP')
+        elif method == 'joint':
+            method_labels.append('Forgetful BO')
+        else:
+            method_labels.append(method.capitalize().replace('_', '\n'))
+    
+    # Create figure with 2x2 subplots (mean±std, min, max, total time)
+    fig, axes = plt.subplots(2, 2, figsize=(figsizes.iclr2023(nrows=1, ncols=1)['figure.figsize'][0], 
+                                             figsizes.iclr2023(nrows=1, ncols=1)['figure.figsize'][1]))
+    
+    x_pos = np.arange(len(methods))
+    bar_width = 0.6
+    
+    # Get colors for each method
+    method_colors = [colors['method_colors'][i % len(colors['method_colors'])] for i in range(len(methods))]
+    
+    # Plot 1: Mean ± Std
+    ax = axes[0, 0]
+    bars = ax.bar(x_pos, mean_times, bar_width, yerr=std_times, 
+                   color=method_colors, alpha=0.7, capsize=5, edgecolor='black', linewidth=1.25)
+    ax.set_ylabel('Time (seconds)')
+    ax.set_title('Mean ± Std (per iteration)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(method_labels, rotation=0, ha='center', fontsize=8)
+    ax.set_yscale('log')
+    _style_axis(ax)
+    ax.grid(axis='y')
+    
+    # Plot 2: Min
+    ax = axes[0, 1]
+    bars = ax.bar(x_pos, min_times, bar_width, 
+                   color=method_colors, alpha=0.7, edgecolor='black', linewidth=1.25)
+    ax.set_ylabel('Time (seconds)')
+    ax.set_title('Minimum (per iteration)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(method_labels, rotation=0, ha='center', fontsize=8)
+    ax.set_yscale('log')
+    _style_axis(ax)
+    ax.grid(axis='y')
+    
+    # Plot 3: Max
+    ax = axes[1, 0]
+    bars = ax.bar(x_pos, max_times, bar_width, 
+                   color=method_colors, alpha=0.7, edgecolor='black', linewidth=1.25)
+    ax.set_ylabel('Time (seconds)')
+    ax.set_title('Maximum (per iteration)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(method_labels, rotation=0, ha='center', fontsize=8)
+    ax.set_yscale('log')
+    _style_axis(ax)
+    ax.grid(axis='y')
+    
+    # Plot 4: Total time
+    ax = axes[1, 1]
+    total_times = [results[method]['timing']['total'] for method in methods]
+    bars = ax.bar(x_pos, total_times, bar_width, 
+                   color=method_colors, alpha=0.7, edgecolor='black', linewidth=1.25)
+    ax.set_ylabel('Time (seconds)')
+    ax.set_title('Total Time (all iterations)')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(method_labels, rotation=0, ha='center', fontsize=8)
+    ax.set_yscale('log')
+    _style_axis(ax)
+    ax.grid(axis='y')
+    
+    # Create shared legend using patches
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=method_colors[i], edgecolor='black', 
+                            linewidth=1.25, alpha=0.7, label=method_labels[i].replace('\n', ' '))
+                      for i in range(len(methods))]
+    fig.legend(handles=legend_elements, loc='lower center', ncol=len(methods),
+              bbox_to_anchor=(0.5, -0.05), frameon=False,
+              columnspacing=1.0, handlelength=1.5, handletextpad=0.5)
+    
+    plt.suptitle(f"Runtime Statistics: {config['objective'].replace('_', ' ').replace('botorch ', '').title()}", 
+                 y=1.02, fontsize=12)
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.15)
+    plt.savefig(f"{plot_path}/runtime_statistics_{config['objective']}.pdf", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Runtime statistics plot saved to {plot_path}")
+
+
+def plot_multiple_runtime_statistics(all_data: list, plot_path: str) -> None:
+    """
+    Create combined runtime bar plots with subplots for different experiments.
+    
+    Args:
+        all_data: List of data dictionaries, each containing 'results' and 'config'
+        plot_path: Directory path to save plots
+    """
+    # Apply ICLR 2023 styling
+    _apply_iclr_style()
+    
+    Path(plot_path).mkdir(parents=True, exist_ok=True)
+    colors = _get_color_palette()
+    
+    n_experiments = len(all_data)
+    
+    # Determine subplot layout
+    if n_experiments <= 4:
+        n_rows = 1
+        n_cols = n_experiments
+    else:
+        n_cols = 4
+        n_rows = (n_experiments + n_cols - 1) // n_cols  # Ceiling division
+    
+    # Collect all methods across all experiments
+    all_methods = set()
+    for data in all_data:
+        all_methods.update(data['results'].keys())
+    all_methods = sorted(list(all_methods))
+    if 'joint' in all_methods:
+        all_methods.remove('joint')
+        all_methods.insert(0, 'joint')
+    
+    # Create method name mapping
+    method_labels = {}
+    for method in all_methods:
+        if method == 'none':
+            method_labels[method] = 'Homoscedastic\nGP'
+        elif method == 'joint':
+            method_labels[method] = 'Forgetful BO'
+        else:
+            method_labels[method] = method.capitalize().replace('_', '\n')
+    
+    # Calculate figure size
+    fig_width = figsizes.iclr2023(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.5)['figure.figsize'][0]
+    fig_height = figsizes.iclr2023(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.5)['figure.figsize'][1]
+    
+    # Create 4 separate figures for each statistic type
+    stat_types = [
+        ('mean', 'Mean ± Std (per iteration)', True),
+    ]
+    
+    for stat_type, stat_title, show_std in stat_types:
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_width, fig_height), squeeze=False)
+        axes_flat = axes.flatten()
+        
+        for idx, (data, ax) in enumerate(zip(all_data, axes_flat[:n_experiments])):
+            results = data['results']
+            config = data['config']
+            methods = list(results.keys())
+            
+            # Check if timing data is available
+            has_timing = all('timing' in results[method] for method in methods)
+            if not has_timing:
+                ax.text(0.5, 0.5, 'No timing data', ha='center', va='center', transform=ax.transAxes)
+                ax.axis('off')
+                continue
+            
+            # Ensure 'joint' (Forgetful BO) is first
+            if 'joint' in methods:
+                methods.remove('joint')
+                methods.insert(0, 'joint')
+            
+            # Extract timing statistics for this experiment
+            if stat_type == 'total':
+                stat_values = [results[method]['timing']['total'] for method in methods]
+                yerr = None
+            else:
+                stat_values = [results[method]['timing'][stat_type] for method in methods]
+                if show_std:
+                    yerr = [results[method]['timing']['std'] for method in methods]
+                else:
+                    yerr = None
+            
+            x_pos = np.arange(len(methods))
+            bar_width = 0.6
+            
+            # Get colors for each method
+            method_colors = [colors['method_colors'][all_methods.index(m) % len(colors['method_colors'])] 
+                            for m in methods]
+            
+            # Create bars
+            bars = ax.bar(x_pos, stat_values, bar_width, yerr=yerr,
+                          color=method_colors, alpha=0.7, capsize=3 if yerr is not None else 0, 
+                          edgecolor='black', linewidth=1.0)
+            
+            # Only show y-label on leftmost subplots
+            if idx % n_cols == 0:
+                ax.set_ylabel('Time (seconds)')
+            ax.set_yscale('log')
+            
+            ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()}", fontsize=9, pad=12)
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels([method_labels[m] for m in methods], rotation=0, ha='center', fontsize=7)
+            _style_axis(ax)
+            ax.grid(axis='y')
+        
+        # Hide unused subplots
+        for idx in range(n_experiments, len(axes_flat)):
+            axes_flat[idx].axis('off')
+        
+        # Create shared legend using patches
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor=colors['method_colors'][i % len(colors['method_colors'])], 
+                                edgecolor='black', linewidth=1.0, alpha=0.7, 
+                                label=method_labels[method].replace('\n', ' '))
+                          for i, method in enumerate(all_methods)]
+        fig.legend(handles=legend_elements, loc='lower center', ncol=len(all_methods),
+                  bbox_to_anchor=(0.5, -0.02), frameon=False,
+                  columnspacing=1.0, handlelength=1.5, handletextpad=0.5)
+        
+        plt.suptitle(f"Runtime Statistics: {stat_title}", y=0.98, fontsize=12)
+        plt.tight_layout()
+        plt.subplots_adjust(bottom=0.12)
+        plt.savefig(f"{plot_path}/combined_runtime_{stat_type}.pdf", dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    print(f"Combined runtime statistics plots saved to {plot_path}")

@@ -1,0 +1,53 @@
+experiment:
+  type: statistic
+  method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
+  objective: casp
+  noise: [joint, epistemic]
+  # CASP dataset: Protein structure prediction
+  # 9 features (F1-F9): Physicochemical properties of protein tertiary structures
+  # Target: RMSD (Root Mean Square Deviation) from experimental structures
+  # Normalized data centered at 0 with std ~1
+  
+  # A_limits: Active learning region (central portion of normalized data)
+  # Setting to [-0.6, 0.6] captures ~45% of data in the center
+  A_limits: [
+    [-1, 0.5],  # F1
+    [-1, 0.5],  # F2
+    [-1, 0.5],  # F3
+    [-1, 0.5],  # F4
+    [-1, 0.5],  # F5
+    [-1, 0.5],  # F6
+    [-1, 0.5],  # F7
+    [-1, 0.5],  # F8
+    [-1, 0.5]   # F9
+  ]
+  
+  # X_limits: Full input space (covers ~99.7% of normalized data)
+  # Setting to [-3, 3] for normalized data (mean=0, std=1)
+  X_limits: [
+    [-3.0, 3.0],  # F1
+    [-3.0, 3.0],  # F2
+    [-3.0, 3.0],  # F3
+    [-3.0, 3.0],  # F4
+    [-3.0, 3.0],  # F5
+    [-3.0, 3.0],  # F6
+    [-3.0, 3.0],  # F7
+    [-3.0, 3.0],  # F8
+    [-3.0, 3.0]   # F9
+  ]
+  
+  num_samples: 163  # Total number of data points in CASP dataset
+  num_train_samples: 100  # Initial training samples
+  num_A_samples: 50      # Samples to select from active learning region
+  seed: 100              # Number of random seeds for statistical analysis
+  fixed_kernel: false
+  show_plots: false      # No plots for multidimensional data
+  show_hessian: false
+  feature_subset: null   # Use all 9 features
+  
+  # Kernel configuration for GP
+  kernel:
+    - type: rbf
+      length_scale: 0.1
+    - type: white
+      noise_level: 0.1

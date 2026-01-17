@@ -12,6 +12,7 @@ def run_experiment(
         num_iters,
         num_seeds,
         opti_options=None,
+        perturbation_config=None,
     ):
     """Runs a full Bayesian optimization experiment."""
     best_observed_all = []
@@ -27,6 +28,7 @@ def run_experiment(
             n_initial_samples=n_initial_samples,
             global_bounds=global_bounds,
             opti_options=opti_options,
+            perturbation_config=perturbation_config,
         )
         
         _, _, best_observed, iteration_times = optimization_loop(num_iters, seed)

@@ -26,6 +26,7 @@ def get_optimization_loop(
         n_initial_samples, 
         global_bounds,
         opti_options=None,
+        perturbation_config=None,
         ):
     """Returns an optimization loop function for Bayesian optimization."""
     if opti_options and hasattr(opti_options, 'get'):
@@ -39,6 +40,21 @@ def get_optimization_loop(
 
     # Check if using baseline method
     is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp', 'modulating_surrogates']
+    
+    # Setup perturbation if configured
+    apply_perturbation = False
+    perturbation_type = None
+    perturbation_prob = 0.0
+    perturbation_value = 0.0
+    
+    if perturbation_config:
+        perturbation_type = perturbation_config.get('type', None)
+        perturbation_prob = perturbation_config.get('probability', 0.0)
+        perturbation_value = perturbation_config.get('value', 0.0)
+        apply_perturbation = perturbation_type is not None and perturbation_prob > 0.0
+        
+        if apply_perturbation:
+            print(f"Perturbation enabled: type={perturbation_type}, prob={perturbation_prob}, value={perturbation_value}")
 
     def optimization_loop(num_iters, seed):
         """Runs the Bayesian optimization loop."""
@@ -50,11 +66,25 @@ def get_optimization_loop(
             torch.ones(global_bounds.shape[1], dtype=global_bounds.dtype, device=global_bounds.device)
         ])
         
-        # Wrap objective function to handle denormalization
+        # Wrap objective function to handle denormalization and perturbation
         def normalized_obj(x_norm):
             """Evaluate objective at normalized inputs by denormalizing first."""
             x_original = unnormalize(x_norm, original_bounds)
-            return obj(x_original)
+            obj_values = obj(x_original)
+            
+            # Apply perturbation if configured
+            if apply_perturbation:
+                # Generate random values for each evaluation
+                batch_size = obj_values.shape[0] if obj_values.dim() > 0 else 1
+                corruption_mask = torch.rand(batch_size) < perturbation_prob
+                
+                if corruption_mask.any():
+                    if perturbation_type == 'constant':
+                        # Apply constant value perturbation
+                        obj_values[corruption_mask] = perturbation_value
+                    # Add other perturbation types here if needed (uniform, random_point, etc.)
+            
+            return obj_values
         
         optimize_acqf_and_get_observation = get_optimize_acqf_and_get_observation(
             num_restarts=num_restarts,

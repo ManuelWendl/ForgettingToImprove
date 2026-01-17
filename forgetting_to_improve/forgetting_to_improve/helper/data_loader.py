@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, Any, Optional
 from sklearn.preprocessing import StandardScaler
+from pathlib import Path
 
 # Global cache for datasets
 _DATASET_CACHE = {}
@@ -135,6 +136,54 @@ def load_twitter() -> Tuple[np.ndarray, np.ndarray]:
     _DATASET_CACHE['twitter'] = (x_normalized, y_normalized)
     return x_normalized, y_normalized
 
+def load_casp() -> Tuple[np.ndarray, np.ndarray]:
+    """Load the CASP (Critical Assessment of protein Structure Prediction) dataset.
+    
+    This dataset contains physicochemical properties of protein tertiary structures
+    and their root-mean-square deviation (RMSD) from experimentally determined structures.
+    
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        x: 9 physicochemical features (F1-F9) (normalized)
+        y: RMSD values (normalized)
+    """
+    # Check if already cached
+    if 'casp' in _DATASET_CACHE:
+        print("Using cached CASP dataset")
+        return _DATASET_CACHE['casp']
+    
+    # Load from local CSV file
+    try:
+        # Get the path to the CSV file relative to this module
+        csv_path = Path(__file__).parent / "CASP.csv"
+        print(f"Loading CASP dataset from: {csv_path}")
+        data = pd.read_csv(csv_path)
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Could not load CASP.csv: {e}. "
+            "Please ensure the file exists at forgetting_to_improve/forgetting_to_improve/helper/CASP.csv"
+        )
+    
+    # Extract features (F1-F9) and target (RMSD)
+    feature_cols = [f'F{i}' for i in range(1, 10)]  # F1, F2, ..., F9
+    x = data[feature_cols].values  # 9 features
+    y = data['RMSD'].values  # Target: Root Mean Square Deviation
+    
+    print(f"CASP dataset loaded: x={x.shape}, y={y.shape}")
+    print(f"Feature ranges:")
+    for i, col in enumerate(feature_cols):
+        print(f"  {col}: [{data[col].min():.2f}, {data[col].max():.2f}]")
+    print(f"RMSD range: [{y.min():.2f}, {y.max():.2f}]")
+    
+    # Normalize the data before caching
+    x_normalized, y_normalized = _normalize_data(x, y, 'casp')
+    
+    # Cache the normalized dataset
+    _DATASET_CACHE['casp'] = (x_normalized, y_normalized)
+    return x_normalized, y_normalized
+
+
 def _load_boston_csv() -> Tuple[np.ndarray, np.ndarray]:
     """Load Boston dataset from GitHub CSV."""
     url = "https://raw.githubusercontent.com/selva86/datasets/master/BostonHousing.csv"
@@ -178,6 +227,7 @@ def load_dataset(dataset_name: str) -> Tuple[np.ndarray, np.ndarray]:
     datasets = {
         'boston': load_boston,
         'twitter': load_twitter,
+        'casp': load_casp,
         # Add more datasets here as needed
     }
     
@@ -272,6 +322,13 @@ def get_dataset_info(dataset_name: str) -> Dict[str, Any]:
             'n_features': 1,
             'is_multidimensional': False,
             'description': 'Twitter flash crash - DJIA prices on April 23, 2013'
+        }
+    elif dataset_name == 'casp':
+        return {
+            'feature_names': ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'],
+            'n_features': 9,
+            'is_multidimensional': True,
+            'description': 'CASP - Protein structure prediction physicochemical properties'
         }
     
     raise ValueError(f"No information available for dataset: {dataset_name}")

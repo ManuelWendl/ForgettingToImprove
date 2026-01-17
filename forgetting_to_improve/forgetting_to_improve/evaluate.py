@@ -600,7 +600,7 @@ def evaluate(
     if calculate_convexity and show_plots and curvature_history and curvature_history.get('m_epi'):
         plot_curvature_bounds(
             curvature_history, 
-            title="Curvature Bound under Forgetting to Improve"
+            title="Curvature Bound"
         )
     
     # Return plot data if requested (for comparison plots)

@@ -900,15 +900,17 @@ def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bound
     ax2.set_yscale('log')
     ax2.grid(True, alpha=0.3, linewidth=0.5)
     ax2.legend(loc='best', frameon=False)
-    ax2.set_ylim(top=10)  # Set upper limit for better visibility
+    top = 10 if min(ratio) > 1e-4 else 10000
+    ax2.set_ylim(top=top)  # Set upper limit for better visibility
     
     # Fill the area above y=1.0 with green to indicate convex region
-    ax2.axhspan(1.0, 10, color='green', alpha=0.1, zorder=0)
+    ax2.axhspan(1.0, top, color='green', alpha=0.1, zorder=0)
     
     ax2.axhline(y=1.0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
 
     # Add "convex" text label slightly above the horizontal line
-    ax2.text(40, 2, 'convex', color='black', fontsize=9, 
+    print(n_samples[0])
+    ax2.text(n_samples[0]-10, 2, 'convex', color='black', fontsize=9, 
              verticalalignment='bottom')
     
     for spine in ax2.spines.values():

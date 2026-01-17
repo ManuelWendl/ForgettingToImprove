@@ -23,11 +23,22 @@ CONFIGS=(
     # "hartmann_6d.yaml"
     # "holder_table.yaml"
     # "levy.yaml"
-    "rosenbrock.yaml"
-    "augmented_rosenbrock.yaml"
+    # "rosenbrock.yaml"
+    # "augmented_rosenbrock.yaml"
     # "six_hump_camel.yaml"
     # "styblinski_tang_2d.yaml"
     # "styblinski_tang_4d.yaml"
+)
+
+CONFIGS=(
+    "ackley_2d_noisy.yaml"
+    "ackley_6d_noisy.yaml"
+    "branin_noisy.yaml"
+    "griewank_noisy.yaml"
+    "hartmann_6d_noisy.yaml"
+    "holder_table_noisy.yaml"
+    "levy_noisy.yaml"
+    "styblinski_tang_2d_noisy.yaml"
 )
 
 # Start time

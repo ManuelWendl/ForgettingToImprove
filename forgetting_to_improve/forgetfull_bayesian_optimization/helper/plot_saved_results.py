@@ -12,7 +12,7 @@ Usage:
 import argparse
 from pathlib import Path
 from .result_writer import load_learning_history
-from .plotting import plot_results, plot_multiple_results
+from .plotting import plot_results, plot_multiple_results, plot_runtime_statistics, plot_multiple_runtime_statistics
 
 
 def main():
@@ -54,6 +54,11 @@ def main():
         # Create combined plots
         print(f"\nCreating combined plots in {plot_path}...")
         plot_multiple_results(all_data, plot_path)
+        
+        # Create combined runtime plots
+        print(f"\nCreating combined runtime statistics plots in {plot_path}...")
+        plot_multiple_runtime_statistics(all_data, plot_path)
+        
         print("\nPlotting complete!")
         
     else:
@@ -63,6 +68,10 @@ def main():
         
         results = data['results']
         config = data['config']
+        # Create runtime plots
+        print(f"\nCreating runtime statistics plot in {plot_path}...")
+        plot_runtime_statistics(results, config, plot_path)
+        
         
         # Create plots
         print(f"\nCreating plots in {plot_path}...")
