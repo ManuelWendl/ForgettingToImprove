@@ -910,7 +910,7 @@ def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bound
 
     # Add "convex" text label slightly above the horizontal line
     print(n_samples[0])
-    ax2.text(n_samples[0]-10, 2, 'convex', color='black', fontsize=9, 
+    ax2.text(n_samples[0]*4/5, 2, 'convex', color='black', fontsize=9, 
              verticalalignment='bottom')
     
     for spine in ax2.spines.values():
