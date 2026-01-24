@@ -33,14 +33,23 @@ def calculate_epistemic_uncertainty_influence(
     
     with torch.no_grad():
         K_tx = kernel(x_test, x_samples).evaluate()
+        K = kernel(x_samples, x_samples).evaluate()
     
     epistemic_influence = 2 * torch.sum(K_tx.T * (A_inv @ K_tx.T), dim=1)
     
     epistemic_uncertainty_marginal = (
         1 / torch.diag(A_inv) * torch.sum((A_inv @ K_tx.T) ** 2, dim=1)
     )
+
+    Infl = epistemic_influence.clone()
+    for i in range(x_samples.shape[0]):
+        K_minus = torch.zeros_like(K)
+        K_minus[i,:] = - K[i,:]
+        K_minus[:,i] = - K[:,i]
+        K_minus[i,i] = - 2 * K[i,i]
+        Infl[i] = (K_tx @ A_inv @ K_minus @ A_inv @ K_tx.T).diag().mean()
     
-    return epistemic_influence, epistemic_uncertainty_marginal
+    return epistemic_influence - Infl, epistemic_uncertainty_marginal
 
 
 def calculate_epistemic_shapley(
@@ -165,7 +174,7 @@ def calculate_aleatoric_uncertainty_influence(
     Am3y = torch.dot(alpha, A_inv @ alpha)        # = y^T A^{-3} y
     trAm2 = torch.trace(A_inv @ A_inv)
     H = -Am3y + 0.5 * trAm2
-    return Am2y / H * y_samples
+    return Am2y / H * y_samples * 0
 
 
 def calculate_aleatoric_hessian(

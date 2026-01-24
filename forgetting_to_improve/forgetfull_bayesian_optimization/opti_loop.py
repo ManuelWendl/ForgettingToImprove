@@ -4,7 +4,7 @@ import gpytorch
 import time
 from botorch import fit_gpytorch_mll
 from botorch.utils.sampling import draw_sobol_samples
-from botorch.utils.transforms import normalize, unnormalize
+from botorch.utils.transforms import unnormalize
 from .opti_aquisition import get_optimize_acqf_and_get_observation
 from .target_region import TargetRegion
 from .filter_samples import filter_samples
