@@ -31,12 +31,12 @@ def select_worst_sample(
         epistemic_influence: Epistemic uncertainty influence
         aleatoric_influence: Aleatoric uncertainty influence
     """
-    epistemic_influence, aleatoric_influence, epistemic_uncertainty_marginal = (
+    epistemic_influence, aleatoric_influence, factor = (
         calculate_uncertainty_influence(model, x_samples, y_samples, x_test)
     )
     
     if noise_type == 'joint':
-        total = epistemic_influence + aleatoric_influence
+        total = epistemic_influence + aleatoric_influence * factor
     elif noise_type == 'epistemic':
         total = epistemic_influence
     elif noise_type == 'aleatoric':

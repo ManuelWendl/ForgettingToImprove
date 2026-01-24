@@ -36,20 +36,17 @@ def calculate_epistemic_uncertainty_influence(
         K = kernel(x_samples, x_samples).evaluate()
     
     epistemic_influence = 2 * torch.sum(K_tx.T * (A_inv @ K_tx.T), dim=1)
-    
-    epistemic_uncertainty_marginal = (
-        1 / torch.diag(A_inv) * torch.sum((A_inv @ K_tx.T) ** 2, dim=1)
-    )
+    factor = (1 + (K_tx @ A_inv @ A_inv @ K_tx.T).diag().mean())
 
-    Infl = epistemic_influence.clone()
+    inner_kernel_der = epistemic_influence.clone()
     for i in range(x_samples.shape[0]):
         K_minus = torch.zeros_like(K)
         K_minus[i,:] = - K[i,:]
         K_minus[:,i] = - K[:,i]
         K_minus[i,i] = - 2 * K[i,i]
-        Infl[i] = (K_tx @ A_inv @ K_minus @ A_inv @ K_tx.T).diag().mean()
+        inner_kernel_der[i] = (K_tx @ A_inv @ K_minus @ A_inv @ K_tx.T).diag().mean()
     
-    return epistemic_influence - Infl, epistemic_uncertainty_marginal
+    return epistemic_influence - inner_kernel_der, factor
 
 
 def calculate_epistemic_shapley(
@@ -253,9 +250,9 @@ def calculate_uncertainty_influence(
         A_inv = torch.inverse(A + 1e-4 * torch.eye(len(x_samples)))
 
     
-    epistemic_influence, epistemic_uncertainty_marginal = (
+    epistemic_influence, factor = (
         calculate_epistemic_uncertainty_influence(A_inv, model, x_samples, x_test)
     )
     aleatoric_influence = calculate_aleatoric_uncertainty_influence(A_inv, y_samples)
     
-    return epistemic_influence, aleatoric_influence, epistemic_uncertainty_marginal
+    return epistemic_influence, aleatoric_influence, factor
