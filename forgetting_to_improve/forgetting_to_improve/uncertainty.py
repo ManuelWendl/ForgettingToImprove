@@ -48,6 +48,80 @@ def calculate_epistemic_uncertainty_influence(
     
     return epistemic_influence - inner_kernel_der, factor
 
+def calculate_aleatoric_uncertainty_influence(
+    A_inv: torch.Tensor, 
+    y_samples: torch.Tensor,
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Calculate the influence of each training point on the MLE noise estimate sigma_w^2.
+    
+    Args:
+        A_inv: Inverse of the covariance matrix (K + sigma_w^2 I)^-1, shape (N, N)
+        y_samples: Training targets, shape (N,)
+        model: The fitted GP model
+        x_samples: Training inputs, shape (N, D)
+        
+    Returns:
+        aleatoric_influence: d(sigma_w^2) / d(h_i) for each i, shape (N,)
+    """
+    kernel = model.covar_module
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+
+    with torch.no_grad():
+        # K is the N x N covariance matrix (without noise)
+        K = kernel(x_samples, x_samples).evaluate()
+
+    # Pre-calculate common terms
+    alpha = A_inv @ y_samples                 # A^-1 y
+    A_inv2 = A_inv @ A_inv                    # A^-2
+    A_inv3_y = A_inv2 @ alpha                 # A^-3 y
+    
+    # f_hat is the vector of predictions at training points: K @ A^-1 @ y
+    f_hat = K @ alpha
+
+    # alpha = A^-1 y
+    # A_inv2_y = A^-2 y (The "second-order" weights)
+    A_inv2_y = A_inv @ alpha 
+    
+    # Term 1: alpha_i * (K @ A^-2 @ y)_i
+    # Term 2: (K @ alpha)_i * (A^-1 @ alpha)_i
+    # These two are actually symmetric in the scalar result but represent 
+    # different parts of the rank-2 update.
+    K_Ainv2_y = K @ A_inv2_y
+    
+    # Corrected Enum_1 (matches the expansion of the quadratic form derivative)
+    Enum_1 = alpha * K_Ainv2_y + f_hat * A_inv2_y
+    
+    # Enum_2: Complexity term [K @ A^-2]_{ii}
+    # This is the diagonal of the product K @ A^-2.
+    # K.mul(A_inv2.T).sum(dim=1) is an efficient way to get diag(K @ A^-2)
+    Enum_2 = torch.sum(K * A_inv2.t(), dim=1)
+
+    # --- Denominator ---
+    # Denom_1: y^T A^-3 y
+    Denom_1 = torch.dot(y_samples, A_inv3_y)
+    
+    # Denom_2: tr(A^-2)
+    Denom_2 = torch.trace(A_inv2)
+    
+    # Hessian of LML w.r.t sigma_w^2
+    # Note: Using your variable H = - Denom_1 + 0.5 * Denom_2
+    H = - Denom_1 + 0.5 * Denom_2
+
+    # The result is (Enum_1 - Enum_2) / H
+    # This follows the Implicit Function Theorem result derived earlier.
+
+    # Now we have to add the prior term in the denominator
+     # Get noise level from likelihood if available
+    prior_contr = 0.0
+    if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
+        noise_level = model.likelihood.noise.item()
+        prior_contr = (2 - 1) / (noise_level ** 2) # Derivative of Gamma prior log-density
+
+    return (Enum_1 - Enum_2) / (H + prior_contr)
 
 def calculate_epistemic_shapley(
     model: gpytorch.models.GP,
@@ -152,28 +226,6 @@ def calculate_epistemic_shapley(
     return shapley_values
 
 
-def calculate_aleatoric_uncertainty_influence(
-    A_inv: torch.Tensor, 
-    y_samples: torch.Tensor
-) -> torch.Tensor:
-    """
-    Calculate the aleatoric uncertainty of the GP predictions at points X.
-    
-    Args:
-        A_inv: Inverse of the covariance matrix (n_train, n_train)
-        y_samples: Training targets (n_train,)
-        
-    Returns:
-        aleatoric_influence: Aleatoric uncertainty influence (n_train,)
-    """
-    alpha = A_inv @ y_samples
-    Am2y = A_inv @ (A_inv @ y_samples)      # = A^{-2} y
-    Am3y = torch.dot(alpha, A_inv @ alpha)        # = y^T A^{-3} y
-    trAm2 = torch.trace(A_inv @ A_inv)
-    H = -Am3y + 0.5 * trAm2
-    return Am2y / H * y_samples * 0
-
-
 def calculate_aleatoric_hessian(
     A_inv: torch.Tensor, 
     y_samples: torch.Tensor
@@ -253,6 +305,6 @@ def calculate_uncertainty_influence(
     epistemic_influence, factor = (
         calculate_epistemic_uncertainty_influence(A_inv, model, x_samples, x_test)
     )
-    aleatoric_influence = calculate_aleatoric_uncertainty_influence(A_inv, y_samples)
+    aleatoric_influence = calculate_aleatoric_uncertainty_influence(A_inv, y_samples, model, x_samples)
     
     return epistemic_influence, aleatoric_influence, factor

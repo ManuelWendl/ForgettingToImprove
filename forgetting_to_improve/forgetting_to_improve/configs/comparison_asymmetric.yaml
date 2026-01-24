@@ -8,7 +8,7 @@ experiment:
   num_samples: 1000
   num_train_samples: 20
   num_A_samples: 50
-  seed: 4
+  seed: 5
   fixed_kernel: true
   show_plots: true
   show_hessian: false
