@@ -4,7 +4,7 @@ import gpytorch
 import time
 from botorch import fit_gpytorch_mll
 from botorch.utils.sampling import draw_sobol_samples
-from botorch.utils.transforms import unnormalize
+from botorch.utils.transforms import unnormalize, standardize
 from .opti_aquisition import get_optimize_acqf_and_get_observation
 from .target_region import TargetRegion
 from .filter_samples import filter_samples
@@ -115,10 +115,16 @@ def get_optimization_loop(
             iteration_start_time = time.time()
             # Handle baseline methods
             if algorithm == 'relevance_pursuit':
+                # Create fresh kernel for each iteration
+                n_dims = train_x.shape[-1]
+                fresh_kernel = gpytorch.kernels.ScaleKernel(
+                    gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=n_dims)
+                )
                 # Reinitialize with relevance pursuit
                 mll, model = initialize_relevance_pursuit_model(
                     train_x=train_x,
-                    train_y=train_obj,
+                    train_y=standardize(train_obj),
+                    kernel=fresh_kernel,
                     device=train_x.device
                 )
             
@@ -127,7 +133,7 @@ def get_optimization_loop(
                 noise_level = obs_noise if obs_noise > 0 else 0.1
                 mll, model = initialize_warped_gp_model(
                     train_x=train_x,
-                    train_y=train_obj,
+                    train_y=standardize(train_obj),
                     kernel=None,  # Create fresh kernel, don't use pre-optimized one
                     noise_level=noise_level,
                     device=train_x.device,
@@ -143,7 +149,7 @@ def get_optimization_loop(
                 # Reinitialize with heteroscedastic GP
                 mll, model = initialize_heteroscedastic_gp_model(
                     train_x=train_x,
-                    train_y=train_obj,
+                    train_y=standardize(train_obj),
                     mean_kernel=fresh_kernel,
                     device=train_x.device
                 )
@@ -153,7 +159,7 @@ def get_optimization_loop(
                 noise_level = obs_noise if obs_noise > 0 else 0.1
                 mll, model = initialize_modulating_surrogates_model(
                     train_x=train_x,
-                    train_y=train_obj,
+                    train_y=standardize(train_obj),
                     kernel=None,
                     noise_level=noise_level,
                     device=train_x.device
@@ -168,7 +174,7 @@ def get_optimization_loop(
                     model=model,
                     mll=mll,
                     train_x=train_x.clone(),
-                    train_obj=train_obj.clone(),
+                    train_obj=standardize(train_obj.clone()),
                     target_region=target_region,
                     algorithm=algorithm,
                     method=method,
@@ -178,11 +184,11 @@ def get_optimization_loop(
                 )
                 
                 # Reinitialize model with filtered samples
-                mll, model = initialize_model(filtered_x_samples, filtered_y_samples, normalized_bounds)
+                mll, model = initialize_model(filtered_x_samples, standardize(filtered_y_samples), normalized_bounds)
             
             else:
                 # No special handling (algorithm == 'none')
-                mll, model = initialize_model(train_x, train_obj, normalized_bounds)
+                mll, model = initialize_model(train_x, standardize(train_obj), normalized_bounds)
             
             # Fit model (skip for heteroscedastic as it's already fitted)
             if algorithm != 'heteroscedastic_gp':

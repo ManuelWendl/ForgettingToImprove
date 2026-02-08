@@ -30,7 +30,7 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
     """
     objective_map = {
         'botorch_ackley_2d': (Ackley(dim=2, negate=True), torch.tensor([[-10.0] * 2, [30.0] * 2], dtype=torch.float64)),
-        'botorch_ackley_6d': (Ackley(dim=6, negate=True), torch.tensor([[-10.0] * 6, [30.0] * 6], dtype=torch.float64)),
+        'botorch_ackley_6d': (Ackley(dim=4, negate=True), torch.tensor([[-10.0] * 4, [30.0] * 4], dtype=torch.float64)),
         'botorch_branin': (Branin(negate=True), torch.tensor([[-5.0, 10.0], [0.0, 15.0]], dtype=torch.float64)),
         'botorch_griewank': (Griewank(negate=True), torch.tensor([[-50.0] * 2, [20.0] * 2], dtype=torch.float64)),
         'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[-5.0] * 2, [10.0] * 2], dtype=torch.float64)),
@@ -63,16 +63,13 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
     """
     if not kernel_configs:
         # Default: Matern 2.5 kernel with LogNormal(0,1) prior for lengthscale
-        base_kernel = MaternKernel(
+        kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
             lengthscale_prior=LogNormalPrior(0, 1),
             lengthscale_constraint=GreaterThan(1e-4)
         )
-        return ScaleKernel(
-            base_kernel,
-            outputscale_prior=GammaPrior(2.0, 0.15)
-        )
+        return kernel
     
     kernels = []
     for kernel_config in kernel_configs:
@@ -90,11 +87,7 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            scale_kernel = ScaleKernel(
-                kernel,
-                outputscale_prior=GammaPrior(2.0, 0.15)
-            )
-            kernels.append(scale_kernel)
+            kernels.append(kernel)
             
         elif kernel_type == 'rbf':
             length_scale = kernel_config.get('length_scale', 1.0)
@@ -106,11 +99,7 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             )
             if length_scale != 1.0:
                 kernel.lengthscale = length_scale
-            scale_kernel = ScaleKernel(
-                kernel,
-                outputscale_prior=GammaPrior(2.0, 0.15)
-            )
-            kernels.append(scale_kernel)
+            kernels.append(kernel)
             
         elif kernel_type == 'white':
             # White noise kernel is handled via likelihood
@@ -125,16 +114,13 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         return AdditiveKernel(*kernels)
     else:
         # Fallback with LogNormal(0,1) prior for lengthscale
-        base_kernel = MaternKernel(
+        kernel = MaternKernel(
             nu=2.5, 
             ard_num_dims=input_dim,
             lengthscale_prior=LogNormalPrior(0, 1),
             lengthscale_constraint=GreaterThan(1e-4)
         )
-        return ScaleKernel(
-            base_kernel,
-            outputscale_prior=GammaPrior(2.0, 0.15)
-        )
+        return kernel
 
 
 def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor, 
@@ -162,13 +148,13 @@ def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor,
     if noise_level > 0:
         # More flexible prior for better adaptation
         likelihood = GaussianLikelihood(
-            noise_prior=GammaPrior(1.1, 0.05),  # More flexible: mean=1.5, std=1.22
+            noise_prior=GammaPrior(2, 0.05),  # More flexible: mean=1.5, std=1.22
             noise_constraint=Interval(1e-6, noise_level * 10.0)
         )
     else:
         # Even for "noiseless" case, use small noise for numerical stability
         likelihood = GaussianLikelihood(
-            noise_prior=GammaPrior(1.1, 0.05),
+            noise_prior=GammaPrior(2, 0.05),
             noise_constraint=Interval(1e-6, 1e-2)
         )
     

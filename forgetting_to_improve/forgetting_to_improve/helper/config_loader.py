@@ -16,7 +16,8 @@ class ConfigLoader:
         self.datasets = {
             'boston': 'boston',
             'twitter': 'twitter',
-            'casp': 'casp'
+            'casp': 'casp',
+            'yacht': 'yacht'
         }
     
     def load_config(self, config_path: str) -> Dict[str, Any]:

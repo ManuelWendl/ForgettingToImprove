@@ -243,7 +243,7 @@ def evaluate(
     likelihood.eval()
     
     # Optimize the training samples by removing detrimental ones
-    curvature_history = {'m_epi': [], 'M_ale': [], 'ratio': [], 'n_samples': []}  # Initialize for all methods
+    curvature_history = {'m': [], 'n_samples': []}  # Initialize for all methods
     
     if method == 'none':
         x_samples_opt = x_samples
@@ -597,10 +597,10 @@ def evaluate(
         )
     
     # Plot curvature bounds if they were calculated
-    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m_epi'):
+    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m'):
         plot_curvature_bounds(
             curvature_history, 
-            title="Curvature Bound"
+            title="Restricted Curvature - Asymmetric"
         )
     
     # Return plot data if requested (for comparison plots)

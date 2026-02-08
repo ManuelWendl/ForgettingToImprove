@@ -58,7 +58,6 @@ def load_boston() -> Tuple[np.ndarray, np.ndarray]:
     
     # Check if already cached
     if 'boston' in _DATASET_CACHE:
-        print("Using cached Boston dataset")
         return _DATASET_CACHE['boston']
     
     # Try multiple data sources in order of preference
@@ -102,7 +101,6 @@ def load_twitter() -> Tuple[np.ndarray, np.ndarray]:
     """
     # Check if already cached
     if 'twitter' in _DATASET_CACHE:
-        print("Using cached Twitter flash crash dataset")
         return _DATASET_CACHE['twitter']
     
     # Load from botorch GitHub repository (tutorials data not included in pip package)
@@ -136,6 +134,64 @@ def load_twitter() -> Tuple[np.ndarray, np.ndarray]:
     _DATASET_CACHE['twitter'] = (x_normalized, y_normalized)
     return x_normalized, y_normalized
 
+def load_yacht() -> Tuple[np.ndarray, np.ndarray]:
+    """Load the Yacht Hydrodynamics dataset.
+    
+    This dataset contains variations in hull geometry coefficients and Froude number
+    to predict residuary resistance per unit weight of displacement.
+    
+    Features:
+    1. Longitudinal position of the center of buoyancy (adimensional)
+    2. Prismatic coefficient (adimensional)
+    3. Length-displacement ratio (adimensional)
+    4. Beam-draught ratio (adimensional)
+    5. Length-beam ratio (adimensional)
+    6. Froude number (adimensional)
+    
+    Target: Residuary resistance per unit weight of displacement (adimensional)
+    
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        x: 6 hull geometry features (normalized)
+        y: Residuary resistance values (normalized)
+    """
+    # Check if already cached
+    if 'yacht' in _DATASET_CACHE:
+        return _DATASET_CACHE['yacht']
+    
+    # Load from local data file
+    try:
+        # Get the path to the data file relative to this module
+        data_path = Path(__file__).parent / "yacht_hydrodynamics.data"
+        print(f"Loading Yacht Hydrodynamics dataset from: {data_path}")
+        # Load space-separated values
+        data = np.loadtxt(data_path)
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Could not load yacht_hydrodynamics.data: {e}. "
+            "Please ensure the file exists at forgetting_to_improve/forgetting_to_improve/helper/yacht_hydrodynamics.data"
+        )
+    
+    # Extract features (columns 0-5) and target (column 6)
+    x = data[:, :6]  # 6 features
+    y = data[:, 6]   # Target: Residuary resistance
+    
+    print(f"Yacht Hydrodynamics dataset loaded: x={x.shape}, y={y.shape}")
+    print(f"Feature ranges:")
+    feature_names = ['LCB', 'PC', 'LDR', 'BDR', 'LBR', 'Froude']
+    for i, name in enumerate(feature_names):
+        print(f"  {name}: [{x[:, i].min():.3f}, {x[:, i].max():.3f}]")
+    print(f"Residuary resistance range: [{y.min():.3f}, {y.max():.3f}]")
+    
+    # Normalize the data before caching
+    x_normalized, y_normalized = _normalize_data(x, y, 'yacht')
+    
+    # Cache the normalized dataset
+    _DATASET_CACHE['yacht'] = (x_normalized, y_normalized)
+    return x_normalized, y_normalized
+
+
 def load_casp() -> Tuple[np.ndarray, np.ndarray]:
     """Load the CASP (Critical Assessment of protein Structure Prediction) dataset.
     
@@ -150,7 +206,6 @@ def load_casp() -> Tuple[np.ndarray, np.ndarray]:
     """
     # Check if already cached
     if 'casp' in _DATASET_CACHE:
-        print("Using cached CASP dataset")
         return _DATASET_CACHE['casp']
     
     # Load from local CSV file
@@ -228,6 +283,7 @@ def load_dataset(dataset_name: str) -> Tuple[np.ndarray, np.ndarray]:
         'boston': load_boston,
         'twitter': load_twitter,
         'casp': load_casp,
+        'yacht': load_yacht,
         # Add more datasets here as needed
     }
     
@@ -329,6 +385,13 @@ def get_dataset_info(dataset_name: str) -> Dict[str, Any]:
             'n_features': 9,
             'is_multidimensional': True,
             'description': 'CASP - Protein structure prediction physicochemical properties'
+        }
+    elif dataset_name == 'yacht':
+        return {
+            'feature_names': ['LCB', 'PC', 'LDR', 'BDR', 'LBR', 'Froude'],
+            'n_features': 6,
+            'is_multidimensional': True,
+            'description': 'Yacht Hydrodynamics - Hull geometry and resistance prediction'
         }
     
     raise ValueError(f"No information available for dataset: {dataset_name}")

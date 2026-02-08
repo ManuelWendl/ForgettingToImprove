@@ -35,7 +35,7 @@ def calculate_epistemic_uncertainty_influence(
         K_tx = kernel(x_test, x_samples).evaluate()
         K = kernel(x_samples, x_samples).evaluate()
     
-    epistemic_influence = 2 * torch.sum(K_tx.T * (A_inv @ K_tx.T), dim=1)
+    epistemic_influence = 2 * torch.mean(K_tx.T * (A_inv @ K_tx.T), dim=1)
     factor = (1 + (K_tx @ A_inv @ A_inv @ K_tx.T).diag().mean())
 
     inner_kernel_der = epistemic_influence.clone()
@@ -79,49 +79,29 @@ def calculate_aleatoric_uncertainty_influence(
     A_inv2 = A_inv @ A_inv                    # A^-2
     A_inv3_y = A_inv2 @ alpha                 # A^-3 y
     
-    # f_hat is the vector of predictions at training points: K @ A^-1 @ y
     f_hat = K @ alpha
 
-    # alpha = A^-1 y
-    # A_inv2_y = A^-2 y (The "second-order" weights)
     A_inv2_y = A_inv @ alpha 
     
-    # Term 1: alpha_i * (K @ A^-2 @ y)_i
-    # Term 2: (K @ alpha)_i * (A^-1 @ alpha)_i
-    # These two are actually symmetric in the scalar result but represent 
-    # different parts of the rank-2 update.
     K_Ainv2_y = K @ A_inv2_y
     
-    # Corrected Enum_1 (matches the expansion of the quadratic form derivative)
     Enum_1 = alpha * K_Ainv2_y + f_hat * A_inv2_y
     
-    # Enum_2: Complexity term [K @ A^-2]_{ii}
-    # This is the diagonal of the product K @ A^-2.
-    # K.mul(A_inv2.T).sum(dim=1) is an efficient way to get diag(K @ A^-2)
     Enum_2 = torch.sum(K * A_inv2.t(), dim=1)
 
-    # --- Denominator ---
-    # Denom_1: y^T A^-3 y
     Denom_1 = torch.dot(y_samples, A_inv3_y)
     
-    # Denom_2: tr(A^-2)
     Denom_2 = torch.trace(A_inv2)
     
-    # Hessian of LML w.r.t sigma_w^2
-    # Note: Using your variable H = - Denom_1 + 0.5 * Denom_2
     H = - Denom_1 + 0.5 * Denom_2
 
-    # The result is (Enum_1 - Enum_2) / H
-    # This follows the Implicit Function Theorem result derived earlier.
-
-    # Now we have to add the prior term in the denominator
-     # Get noise level from likelihood if available
     prior_contr = 0.0
     if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
         noise_level = model.likelihood.noise.item()
-        prior_contr = (2 - 1) / (noise_level ** 2) # Derivative of Gamma prior log-density
+        # Fallback to default Gamma(5, 0.05) if prior not found
+        prior_contr = (2 - 1) / (noise_level ** 2)
 
-    return (Enum_1 - Enum_2) / (H + prior_contr)
+    return (Enum_1 - Enum_2) / (- torch.abs(H) - prior_contr)
 
 def calculate_epistemic_shapley(
     model: gpytorch.models.GP,

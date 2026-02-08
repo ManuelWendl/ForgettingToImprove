@@ -8,18 +8,18 @@ experiment:
   # Target: RMSD (Root Mean Square Deviation) from experimental structures
   # Normalized data centered at 0 with std ~1
   
-  # A_limits: Active learning region (central portion of normalized data)
-  # Setting to [-0.6, 0.6] captures ~45% of data in the center
+  # A_limits: Active learning region (smooth, low-noise region)
+  # Optimized region: 12 points with avg local variance 0.0000
   A_limits: [
-    [-0.5, 0.6],  # F1
-    [-0.5, 0.6],  # F2
-    [-0.5, 0.6],  # F3
-    [-0.5, 0.6],  # F4
-    [-0.5, 0.6],  # F5
-    [-0.5, 0.6],  # F6
-    [-0.5, 0.6],  # F7
-    [-0.5, 0.6],  # F8
-    [-0.5, 0.6]   # F9
+    [-1.468, -1.440],  # F1
+    [-1.338, -1.312],  # F2
+    [-0.509, -0.480],  # F3
+    [-1.269, -1.243],  # F4
+    [-1.438, -1.409],  # F5
+    [-1.433, -1.406],  # F6
+    [-1.122, -1.092],  # F7
+    [-1.036, -1.016],  # F8
+    [1.657, 1.682]     # F9
   ]
   
   # X_limits: Full input space (covers ~99.7% of normalized data)
@@ -36,8 +36,8 @@ experiment:
     [-5.0, 5.0]   # F9
   ]
   
-  num_samples: 163  # Total number of data points in CASP dataset
-  num_train_samples: 40  # Initial training samples
+  num_samples: 45000  # Total number of data points in CASP dataset
+  num_train_samples: 200  # Initial training samples
   num_A_samples: 50      # Samples to select from active learning region
   seed: 100              # Number of random seeds for statistical analysis
   fixed_kernel: false
@@ -47,7 +47,8 @@ experiment:
   
   # Kernel configuration for GP
   kernel:
-    - type: rbf
+    - type: 'matern'
+      nu: 2.5
       length_scale: 0.1
     - type: white
       noise_level: 0.1
