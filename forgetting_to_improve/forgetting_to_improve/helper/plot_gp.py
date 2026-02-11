@@ -821,6 +821,75 @@ def visualize_per_kernel_influence(epistemic_influences, title="Per-Kernel Influ
     plt.close()
 
 
+def plot_optimal_comparison(fti_uncertainty, optimal_uncertainty, n_samples_list, title="FTI vs Optimal Subset Selection"):
+    """
+    Plot comparison between FTI (greedy) and optimal (exhaustive search) subset selection.
+    
+    Args:
+        fti_uncertainty: List of uncertainties from FTI greedy approach
+        optimal_uncertainty: List of uncertainties from optimal exhaustive search
+        n_samples_list: List of subset sizes corresponding to each uncertainty value
+        title: Plot title
+    """
+    if not fti_uncertainty or not optimal_uncertainty:
+        print("No uncertainty data to plot")
+        return
+    
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    # Create single plot
+    fig, ax = plt.subplots(1, 1, 
+                          figsize=(figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.6)['figure.figsize']))
+    
+    # Define colors
+    color_fti = "#5F4690"  # Purple - Forgetting to Improve
+    color_optimal = "#1D6996"  # Blue - Optimal
+    
+    # Convert to numpy arrays
+    n_samples_array = np.array(n_samples_list)
+    fti_array = np.array(fti_uncertainty)
+    optimal_array = np.array(optimal_uncertainty)
+    
+    # Plot both curves
+    ax.plot(n_samples_array, fti_array, marker='o', markersize=5, 
+            color=color_fti, linewidth=2, alpha=0.9, label='FTI (Greedy)')
+    ax.plot(n_samples_array, optimal_array, marker='s', markersize=5, 
+            color=color_optimal, linewidth=2, alpha=0.9, label='Optimal (Exhaustive)')
+    
+    # Set labels
+    ax.set_xlabel(r'Number of Samples $|\mathcal{S}|$')
+    ax.set_ylabel(r'Predictive Uncertainty $\bar{\sigma}^2$')
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    
+    # Add legend
+    ax.legend(loc='best', frameon=False, fontsize=9)
+    
+    # Invert x-axis to show decreasing samples (left to right)
+    ax.invert_xaxis()
+    
+    # Style spines
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.25)
+    
+    plt.title(title, fontsize=12)
+    plt.tight_layout()
+    
+    # Save the plot
+    filename = title.replace(" ", "_").lower() + '.pdf'
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Optimal comparison plot saved to {filepath}")
+    plt.close()
+
+
 def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
     """
     Plot the evolution of curvature bound m during sample removal.

@@ -185,7 +185,7 @@ def integrate_hessians_over_region(
     x_samples: torch.Tensor,
     y_samples: torch.Tensor,
     noise_level: float,
-    A_limits: Tuple,
+    x_test: Tuple,
     n_integration_samples: int = 100,
     gamma_prior_a: float = 2,
     gamma_prior_b: float = 0.15
@@ -198,7 +198,6 @@ def integrate_hessians_over_region(
         H_ale_integrated: ∫_A H^ale(x) dx
     """
     n_train = x_samples.shape[0]
-    n_dims = x_samples.shape[1]
     device = x_samples.device
     
     # First compute the aleatoric Hessian components (independent of x)
@@ -216,39 +215,23 @@ def integrate_hessians_over_region(
     D = -torch.dot(alpha_1, alpha_2) + 0.5 * torch.trace(A_inv_2) - (gamma_prior_a - 1) / (noise_level ** 2)
     grad_sigma = (1.0 / D) * (-alpha_1 * s_2 - alpha_2 * s_1 + torch.diag(M_2))
     
-    # Generate integration samples within A
-    if n_dims == 1:
-        x_A = torch.linspace(A_limits[0], A_limits[1], n_integration_samples, device=device).unsqueeze(-1)
-        volume = A_limits[1] - A_limits[0]
-    else:
-        if not isinstance(A_limits[0], (list, tuple)):
-            A_limits = [A_limits] * n_dims
-        
-        x_A = torch.rand(n_integration_samples, n_dims, device=device)
-        for dim in range(n_dims):
-            x_A[:, dim] = x_A[:, dim] * (A_limits[dim][1] - A_limits[dim][0]) + A_limits[dim][0]
-        
-        volume = 1.0
-        for dim_limits in A_limits:
-            volume *= (dim_limits[1] - dim_limits[0])
-    
     # Integrate Hessians over test points
     H_epi_sum = torch.zeros((n_train, n_train), device=device)
     H_ale_sum = torch.zeros((n_train, n_train), device=device)
     
-    for i in range(n_integration_samples):
-        x_test = x_A[i:i+1]
+    for i in range(len(x_test)):
+        x_t = x_test[i:i+1]
         
         # Compute Hessians at this test point
-        H_epi_x = compute_epistemic_hessian(A_inv, K, x_test, kernel, x_samples)
-        H_ale_x = compute_aleatoric_hessian_at_x(A_inv, K, x_test, kernel, x_samples, grad_sigma, hess_sigma)
+        H_epi_x = compute_epistemic_hessian(A_inv, K, x_t, kernel, x_samples)
+        H_ale_x = compute_aleatoric_hessian_at_x(A_inv, K, x_t, kernel, x_samples, grad_sigma, hess_sigma)
         
         H_epi_sum += H_epi_x
         H_ale_sum += H_ale_x
     
     # Scale by volume / n_samples to approximate integral
-    H_epi_integrated = (volume / n_integration_samples) * H_epi_sum
-    H_ale_integrated = (volume / n_integration_samples) * H_ale_sum
+    H_epi_integrated = (1 / len(x_test)) * H_epi_sum
+    H_ale_integrated = (1 / len(x_test)) * H_ale_sum
     
     # The formulas compute ∇²σ², but the objective is J̄ = -∫σ²
     # Therefore: ∇²J̄ = -∫∇²σ² = -∫[H^epi + H^ale]
@@ -259,7 +242,7 @@ def calculate_curvature_bounds(
     model: gpytorch.models.GP,
     x_samples: torch.Tensor,
     y_samples: torch.Tensor,
-    A_limits: Tuple,
+    x_test: Tuple,
     n_integration_samples: int = 1000,
     next_removal_index: int = None
 ) -> float:
@@ -317,7 +300,7 @@ def calculate_curvature_bounds(
         x_samples=x_samples,
         y_samples=y_samples,
         noise_level=noise_level,
-        A_limits=A_limits,
+        x_test=x_test,
         n_integration_samples=n_integration_samples
     )
     

@@ -54,6 +54,7 @@ def evaluate(
     fixed_kernel: bool = True,
     show_plots: bool = False,
     show_hessian: bool = False,
+    compare_optimal: bool = False,
     calculate_convexity: bool = False,
     objective_type: str = 'function',
     feature_subset: Optional[Union[int, List[int]]] = None,
@@ -456,6 +457,7 @@ def evaluate(
             max_iter=len(x_samples) - 2,
             noise_type=noise,
             show_hessian=show_hessian,
+            compare_optimal=compare_optimal,
             calculate_convexity=calculate_convexity,
             A_limits=A_limits
         )

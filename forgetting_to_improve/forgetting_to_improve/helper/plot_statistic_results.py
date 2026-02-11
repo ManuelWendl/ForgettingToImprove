@@ -237,11 +237,11 @@ def plot_radar_comparison(results_folder, output_folder=None):
     # Colors for each method (matching plot_gp.py style)
     method_colors = {
         'sequential_joint': '#5F4690',  # Purple for Forgetting to Improve
-        'none_joint': '#666666',
-        'targetSampling_joint': '#73AF48',
-        'relevance_pursuit_joint': '#CC503E',
-        'warped_gp_joint': '#38A6A5',
-        'heteroscedastic_gp_joint': '#1D6996'
+        'none_joint': "#1D6996",
+        'targetSampling_joint': "#38A6A5",
+        'relevance_pursuit_joint': "#0F8554",
+        'warped_gp_joint': "#73AF48",
+        'heteroscedastic_gp_joint': "#EDAD08"
     }
     
     # Metrics to plot
@@ -278,7 +278,7 @@ def plot_radar_comparison(results_folder, output_folder=None):
         'twitter': 'Dow Jones',
         'boston': 'Boston Housing',
         'casp': 'CASP',
-        'yacht': 'Yacht Hydrodynamics'
+        'yacht': 'Yacht'
     }
     
     # Create radar factory
@@ -404,6 +404,449 @@ def plot_radar_comparison(results_folder, output_folder=None):
     plt.close()
 
 
+def plot_line_profile_comparison(results_folder, output_folder=None):
+    """
+    Create line profile plots comparing different methods across benchmarks.
+    
+    Parameters
+    ----------
+    results_folder : str
+        Path to folder containing results .txt files
+    output_folder : str, optional
+        Path to save output figures. If None, saves to figures/radar_plots/
+    """
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    # Method mapping (sequential_joint first to plot first)
+    method_mapping = {
+        'sequential_joint': 'Forgetting to Improve',
+        'none_joint': 'Homoscedastic GP',
+        'targetSampling_joint': 'Target Sampling',
+        'relevance_pursuit_joint': 'Relevance Pursuit',
+        'warped_gp_joint': 'Warped GP',
+        'heteroscedastic_gp_joint': 'Heteroscedastic GP'
+    }
+    
+    # Colors for each method (matching plot_gp.py style)
+    method_colors = {
+        'sequential_joint': '#5F4690',  # Purple for Forgetting to Improve
+        'none_joint': "#1D6996",
+        'targetSampling_joint': "#38A6A5",
+        'relevance_pursuit_joint': "#0F8554",
+        'warped_gp_joint': "#73AF48",
+        'heteroscedastic_gp_joint': "#EDAD08"
+    }
+    
+    # Line styles for better distinction
+    method_linestyles = {
+        'sequential_joint': '-',
+        'none_joint': '-',
+        'targetSampling_joint': '-',
+        'relevance_pursuit_joint': '-',
+        'warped_gp_joint': '-',
+        'heteroscedastic_gp_joint': '-'
+    }
+    
+    # Markers for each method
+    method_markers = {
+        'sequential_joint': 'o',
+        'none_joint': 's',
+        'targetSampling_joint': '^',
+        'relevance_pursuit_joint': 'D',
+        'warped_gp_joint': 'v',
+        'heteroscedastic_gp_joint': 'p'
+    }
+    
+    # Metrics to plot
+    metrics = ['MSE', 'MAE', 'NLL', 'CE', 'V-ECE', 'Sharpness']
+    
+    # Find all .txt files in the results folder
+    txt_files = []
+    for fname in os.listdir(results_folder):
+        if fname.endswith('.txt'):
+            txt_files.append(os.path.join(results_folder, fname))
+    
+    if not txt_files:
+        print(f"No .txt files found in {results_folder}")
+        return
+    
+    # Parse all files
+    benchmarks = {}
+    for filepath in txt_files:
+        # Extract benchmark name from filename
+        basename = os.path.basename(filepath)
+        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421.txt"
+        benchmark_name = basename.split('_fitting_comparison')[0]
+        
+        results = parse_results_file(filepath)
+        if results:
+            benchmarks[benchmark_name] = results
+    
+    if not benchmarks:
+        print("No valid results found in files")
+        return
+    
+    # Benchmark display name mapping
+    benchmark_display_names = {
+        'twitter': 'Dow Jones',
+        'boston': 'Boston Housing',
+        'casp': 'CASP',
+        'yacht': 'Yacht'
+    }
+    
+    # Determine grid size
+    n_benchmarks = len(benchmarks)
+    n_cols = min(3, n_benchmarks)
+    n_rows = (n_benchmarks + n_cols - 1) // n_cols
+    
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, 
+                             figsize=figsizes.neurips2024(nrows=n_rows, ncols=n_cols, 
+                                                          height_to_width_ratio=0.8)['figure.figsize'])
+    
+    # Ensure axes is always a list
+    if n_benchmarks == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten() if n_benchmarks > 1 else [axes]
+    
+    # Plot each benchmark
+    for idx, (benchmark_name, data) in enumerate(sorted(benchmarks.items())):
+        ax = axes[idx]
+        
+        # Normalize metrics (only considering methods we're plotting)
+        normalized_data = normalize_metrics(data, metrics, methods_to_include=list(method_mapping.keys()))
+        
+        # X-axis positions for metrics
+        x_positions = np.arange(len(metrics))
+        
+        # Find best method for each metric
+        best_methods = []
+        for metric in metrics:
+            best_method = None
+            best_value = -1
+            for method_key in method_mapping.keys():
+                if method_key in normalized_data and metric in normalized_data[method_key]:
+                    val = normalized_data[method_key][metric]
+                    if val > best_value:
+                        best_value = val
+                        best_method = method_key
+            best_methods.append(best_method)
+        
+        # Plot all methods except sequential_joint first (so it appears on top)
+        for method_key in method_mapping.keys():
+            if method_key == 'sequential_joint':
+                continue  # Plot this last
+            if method_key in normalized_data:
+                values = [normalized_data[method_key].get(m, 0.0) for m in metrics]
+                ax.plot(x_positions, values, 
+                       color=method_colors[method_key],
+                       linewidth=1.5,
+                       linestyle=method_linestyles[method_key],
+                       marker='none',
+                       label=method_mapping[method_key],
+                       alpha=0.8)
+                
+                # Add markers only for best values
+                for i, (x, val, metric) in enumerate(zip(x_positions, values, metrics)):
+                    if best_methods[i] == method_key:
+                        ax.plot(x, val, 
+                               marker=method_markers[method_key],
+                               markersize=5,
+                               color=method_colors[method_key],
+                               zorder=5)
+        
+        # Plot sequential_joint last so it appears on top
+        if 'sequential_joint' in normalized_data:
+            values = [normalized_data['sequential_joint'].get(m, 0.0) for m in metrics]
+            ax.plot(x_positions, values, 
+                   color=method_colors['sequential_joint'],
+                   linewidth=2.5,
+                   linestyle=method_linestyles['sequential_joint'],
+                   marker='none',
+                   label=method_mapping['sequential_joint'],
+                   alpha=1.0,
+                   zorder=10)  # Higher zorder to ensure it's on top
+            
+            # Add markers only for best values
+            for i, (x, val, metric) in enumerate(zip(x_positions, values, metrics)):
+                if best_methods[i] == 'sequential_joint':
+                    ax.plot(x, val, 
+                           marker=method_markers['sequential_joint'],
+                           markersize=6,
+                           color=method_colors['sequential_joint'],
+                           zorder=15)
+        
+        # Determine row and column position
+        row = idx // n_cols
+        col = idx % n_cols
+        
+        # Configure axes
+        ax.set_xticks(x_positions)
+        # Only show x-tick labels in the bottom row
+        if row == n_rows - 1 or idx >= n_benchmarks - n_cols:
+            ax.set_xticklabels(metrics, rotation=45, ha='right')
+        else:
+            ax.set_xticklabels([])
+        
+        # Only show y-label in the first column
+        if col == 0:
+            ax.set_ylabel('Rel. Performance', fontsize=9)
+        
+        ax.set_ylim(-0.05, 1.1)
+        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+        
+        # Only show y-tick labels in the first column
+        if col != 0:
+            ax.set_yticklabels([])
+        
+        ax.grid(True, linewidth=0.5, color='gainsboro', alpha=0.5, axis='y')
+        ax.set_axisbelow(True)
+        
+        # Set title with mapped display name
+        display_name = benchmark_display_names.get(benchmark_name, benchmark_name.replace('_', ' ').title())
+        ax.set_title(display_name, weight='bold', size=10, pad=10)
+        
+        # Add horizontal line at 1.0 for reference (best possible)
+        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.3, zorder=0)
+    
+    # Hide unused subplots
+    for idx in range(n_benchmarks, len(axes)):
+        axes[idx].axis('off')
+    
+    # Create shared legend
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        # Reorder so Forgetting to Improve appears first in legend
+        try:
+            fti_idx = labels.index('Forgetting to Improve')
+            # Move it to the front
+            handles = [handles[fti_idx]] + handles[:fti_idx] + handles[fti_idx+1:]
+            labels = [labels[fti_idx]] + labels[:fti_idx] + labels[fti_idx+1:]
+        except ValueError:
+            pass  # If not found, keep original order
+        
+        fig.legend(handles, labels, 
+                  loc='upper center',
+                  bbox_to_anchor=(0.5, 0.1),
+                  ncol=3,
+                  frameon=False,
+                  fontsize=9,
+                  columnspacing=1.0,
+                  handlelength=2.0)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0.06, 1, 0.98])
+    
+    # Save figure
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures', 'radar_plots')
+    os.makedirs(output_folder, exist_ok=True)
+    
+    output_path = os.path.join(output_folder, 'benchmark_line_profile_comparison.pdf')
+    fig.savefig(output_path, bbox_inches='tight', dpi=300)
+    print(f"Line profile plot saved to {output_path}")
+    plt.close()
+
+
+def plot_bar_comparison(results_folder, output_folder=None):
+    """
+    Create bar plots with dodged/grouped bars comparing different methods across benchmarks.
+    
+    Parameters
+    ----------
+    results_folder : str
+        Path to folder containing results .txt files
+    output_folder : str, optional
+        Path to save output figures. If None, saves to figures/radar_plots/
+    """
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    # Method mapping (sequential_joint first to plot first)
+    method_mapping = {
+        'sequential_joint': 'Forgetting to Improve',
+        'none_joint': 'Homoscedastic GP',
+        'targetSampling_joint': 'Target Sampling',
+        'relevance_pursuit_joint': 'Relevance Pursuit',
+        'warped_gp_joint': 'Warped GP',
+        'heteroscedastic_gp_joint': 'Heteroscedastic GP'
+    }
+    
+    # Colors for each method (matching plot_gp.py style)
+    method_colors = {
+        'sequential_joint': '#5F4690',  # Purple for Forgetting to Improve
+        'none_joint': "#1D6996",
+        'targetSampling_joint': "#38A6A5",
+        'relevance_pursuit_joint': "#0F8554",
+        'warped_gp_joint': "#73AF48",
+        'heteroscedastic_gp_joint': "#EDAD08"
+    }
+    
+    # Metrics to plot
+    metrics = ['MSE', 'MAE', 'NLL', 'CE', 'V-ECE', 'Sharpness']
+    
+    # Find all .txt files in the results folder
+    txt_files = []
+    for fname in os.listdir(results_folder):
+        if fname.endswith('.txt'):
+            txt_files.append(os.path.join(results_folder, fname))
+    
+    if not txt_files:
+        print(f"No .txt files found in {results_folder}")
+        return
+    
+    # Parse all files
+    benchmarks = {}
+    for filepath in txt_files:
+        # Extract benchmark name from filename
+        basename = os.path.basename(filepath)
+        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421.txt"
+        benchmark_name = basename.split('_fitting_comparison')[0]
+        
+        results = parse_results_file(filepath)
+        if results:
+            benchmarks[benchmark_name] = results
+    
+    if not benchmarks:
+        print("No valid results found in files")
+        return
+    
+    # Benchmark display name mapping
+    benchmark_display_names = {
+        'twitter': 'Dow Jones',
+        'boston': 'Boston Housing',
+        'casp': 'CASP',
+        'yacht': 'Yacht'
+    }
+    
+    # Determine grid size
+    n_benchmarks = len(benchmarks)
+    n_cols = min(3, n_benchmarks)
+    n_rows = (n_benchmarks + n_cols - 1) // n_cols
+    
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, 
+                             figsize=figsizes.neurips2024(nrows=n_rows, ncols=n_cols, 
+                                                          height_to_width_ratio=0.75)['figure.figsize'])
+    
+    # Ensure axes is always a list
+    if n_benchmarks == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten() if n_benchmarks > 1 else [axes]
+    
+    # Bar width and positions
+    n_methods = len(method_mapping)
+    bar_width = 0.8 / n_methods  # Total width of 0.8 divided by number of methods
+    
+    # Plot each benchmark
+    for idx, (benchmark_name, data) in enumerate(sorted(benchmarks.items())):
+        ax = axes[idx]
+        
+        # Normalize metrics (only considering methods we're plotting)
+        normalized_data = normalize_metrics(data, metrics, methods_to_include=list(method_mapping.keys()))
+        
+        # X-axis positions for metrics
+        x_positions = np.arange(len(metrics))
+        
+        # Plot bars for each method
+        for method_idx, method_key in enumerate(method_mapping.keys()):
+            if method_key in normalized_data:
+                # Calculate offset for this method
+                offset = (method_idx - n_methods/2 + 0.5) * bar_width
+                values = [normalized_data[method_key].get(m, 0.0) for m in metrics]
+                
+                # Plot bars
+                ax.bar(x_positions + offset, values,
+                      width=bar_width,
+                      color=method_colors[method_key],
+                      label=method_mapping[method_key],
+                      alpha=0.9 if method_key == 'sequential_joint' else 0.4,
+                      edgecolor=method_colors[method_key],
+                      linewidth=1.0)
+        
+        # Determine row and column position
+        row = idx // n_cols
+        col = idx % n_cols
+        
+        # Configure axes
+        ax.set_xticks(x_positions)
+        # Only show x-tick labels in the bottom row
+        if row == n_rows - 1 or idx >= n_benchmarks - n_cols:
+            ax.set_xticklabels(metrics, rotation=45, ha='right')
+        else:
+            ax.set_xticklabels([])
+        
+        # Only show y-label in the first column
+        if col == 0:
+            ax.set_ylabel('Rel. Performance', fontsize=9)
+        
+        ax.set_ylim(0, 1.15)
+        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+        
+        # Only show y-tick labels in the first column
+        if col != 0:
+            ax.set_yticklabels([])
+        
+        ax.grid(True, linewidth=0.5, color='gainsboro', alpha=0.5, axis='y')
+        ax.set_axisbelow(True)
+        
+        # Set title with mapped display name
+        display_name = benchmark_display_names.get(benchmark_name, benchmark_name.replace('_', ' ').title())
+        ax.set_title(display_name, weight='bold', size=10, pad=10)
+        
+        # Add horizontal line at 1.0 for reference (best possible)
+        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.3, zorder=0)
+    
+    # Hide unused subplots
+    for idx in range(n_benchmarks, len(axes)):
+        axes[idx].axis('off')
+    
+    # Create shared legend
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        # Reorder so Forgetting to Improve appears first in legend
+        try:
+            fti_idx = labels.index('Forgetting to Improve')
+            # Move it to the front
+            handles = [handles[fti_idx]] + handles[:fti_idx] + handles[fti_idx+1:]
+            labels = [labels[fti_idx]] + labels[:fti_idx] + labels[fti_idx+1:]
+        except ValueError:
+            pass  # If not found, keep original order
+        
+        fig.legend(handles, labels, 
+                  loc='upper center',
+                  bbox_to_anchor=(0.5, 0.1),
+                  ncol=3,
+                  frameon=False,
+                  fontsize=9,
+                  columnspacing=1.0,
+                  handlelength=2.0)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0.06, 1, 0.98])
+    
+    # Save figure
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures', 'radar_plots')
+    os.makedirs(output_folder, exist_ok=True)
+    
+    output_path = os.path.join(output_folder, 'benchmark_bar_comparison.pdf')
+    fig.savefig(output_path, bbox_inches='tight', dpi=300)
+    print(f"Bar plot saved to {output_path}")
+    plt.close()
+
+
 if __name__ == '__main__':
     # Example usage
     import sys
@@ -417,3 +860,5 @@ if __name__ == '__main__':
     
     print(f"Plotting results from: {results_folder}")
     plot_radar_comparison(results_folder)
+    plot_line_profile_comparison(results_folder)
+    plot_bar_comparison(results_folder)

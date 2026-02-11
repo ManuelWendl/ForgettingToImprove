@@ -9,9 +9,10 @@ experiment:
   num_train_samples: 20
   num_A_samples: 50
   seed: 4
-  fixed_kernel: true
+  fixed_kernel: false
   show_plots: true
-  show_hessian: false
+  show_hessian: true
+  compare_optimal: true
   calculate_convexity: true
 kernel:
   - type: 'matern'

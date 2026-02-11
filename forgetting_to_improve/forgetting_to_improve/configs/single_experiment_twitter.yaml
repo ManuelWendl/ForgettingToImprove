@@ -11,7 +11,8 @@ experiment:
   seed: 5
   fixed_kernel: true
   show_plots: true
-  show_hessian: false
+  show_hessian: true
+  compare_optimal: true
   calculate_convexity: true
   kernel:
   - type: 'matern'
