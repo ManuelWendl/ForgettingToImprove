@@ -821,15 +821,84 @@ def visualize_per_kernel_influence(epistemic_influences, title="Per-Kernel Influ
     plt.close()
 
 
-def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
+def plot_optimal_comparison(fti_uncertainty, optimal_uncertainty, n_samples_list, title="FTI vs Optimal Subset Selection"):
     """
-    Plot the evolution of epistemic and aleatoric curvature bounds during sample removal.
+    Plot comparison between FTI (greedy) and optimal (exhaustive search) subset selection.
     
     Args:
-        curvature_history: Dictionary with keys 'm_epi', 'M_ale', 'ratio', 'n_samples'
+        fti_uncertainty: List of uncertainties from FTI greedy approach
+        optimal_uncertainty: List of uncertainties from optimal exhaustive search
+        n_samples_list: List of subset sizes corresponding to each uncertainty value
         title: Plot title
     """
-    if not curvature_history or not curvature_history.get('m_epi'):
+    if not fti_uncertainty or not optimal_uncertainty:
+        print("No uncertainty data to plot")
+        return
+    
+    # Apply ICLR 2023 styling
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"legend.frameon": False})
+    
+    # Create single plot
+    fig, ax = plt.subplots(1, 1, 
+                          figsize=(figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.6)['figure.figsize']))
+    
+    # Define colors
+    color_fti = "#5F4690"  # Purple - Forgetting to Improve
+    color_optimal = "#1D6996"  # Blue - Optimal
+    
+    # Convert to numpy arrays
+    n_samples_array = np.array(n_samples_list)
+    fti_array = np.array(fti_uncertainty)
+    optimal_array = np.array(optimal_uncertainty)
+    
+    # Plot both curves
+    ax.plot(n_samples_array, fti_array, marker='o', markersize=5, 
+            color=color_fti, linewidth=2, alpha=0.9, label='FTI (Greedy)')
+    ax.plot(n_samples_array, optimal_array, marker='s', markersize=5, 
+            color=color_optimal, linewidth=2, alpha=0.9, label='Optimal (Exhaustive)')
+    
+    # Set labels
+    ax.set_xlabel(r'Number of Samples $|\mathcal{S}|$')
+    ax.set_ylabel(r'Predictive Uncertainty $\bar{\sigma}^2$')
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    
+    # Add legend
+    ax.legend(loc='best', frameon=False, fontsize=9)
+    
+    # Invert x-axis to show decreasing samples (left to right)
+    ax.invert_xaxis()
+    
+    # Style spines
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.25)
+    
+    plt.title(title, fontsize=12)
+    plt.tight_layout()
+    
+    # Save the plot
+    filename = title.replace(" ", "_").lower() + '.pdf'
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Optimal comparison plot saved to {filepath}")
+    plt.close()
+
+
+def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
+    """
+    Plot the evolution of curvature bound m during sample removal.
+    
+    Args:
+        curvature_history: Dictionary with keys 'm', 'n_samples'
+        title: Plot title
+    """
+    if not curvature_history or not curvature_history.get('m'):
         print("No curvature history to plot")
         return
     
@@ -840,83 +909,76 @@ def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bound
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
     plt.rcParams.update({"legend.frameon": False})
     
-    # Create figure with two subplots
-    fig, axes = plt.subplots(1, 2, 
-                            figsize=(figsizes.iclr2023(nrows=1, ncols=2.5, height_to_width_ratio=1.0)['figure.figsize'][0], 
-                                    figsizes.iclr2023(nrows=1, ncols=2.5, height_to_width_ratio=1.0)['figure.figsize'][1]))
+    # Create single plot
+    fig, ax = plt.subplots(1, 1, 
+                          figsize=(figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.5)['figure.figsize']))
     
-    # Define colors matching the reference style
-    colors = {
-        'm_epi': "#1D6996",    # Blue
-        'M_ale': "#CC503E",    # Red
-        'ratio': "#5F4690"     # Purple
-    }
+    # Define color
+    color = "#1D6996"  # Blue
     
-    n_samples = curvature_history['n_samples']
-    m_epi = curvature_history['m_epi']
-    M_ale = curvature_history['M_ale']
-    ratio = curvature_history['ratio']
+    n_samples = np.array(curvature_history['n_samples'])
+    m = np.flip(np.cumsum(np.flip(np.array(curvature_history['m']))))
     
-    # Plot 1: m_epi and M_ale on separate y-axes
-    ax1 = axes[0]
-    ax1_twin = ax1.twinx()
+    # Debug output
+    print(f"Plotting curvature with {len(n_samples)} points")
+    print(f"n_samples range: {min(n_samples)} to {max(n_samples)}")
+    print(f"m range: {min(m)} to {max(m)}")
     
-    # Plot m_epi on left y-axis
-    line1 = ax1.plot(n_samples, m_epi, marker='o', markersize=4, 
-                     color=colors['m_epi'], linewidth=1.5, label=r'$m_{\mathrm{epi}}$', 
-                     alpha=0.9)
-    ax1.set_xlabel('Number of Samples')
-    ax1.set_ylabel(r'$m_{\mathrm{epi}}$', color=colors['m_epi'])
-    ax1.tick_params(axis='y', labelcolor=colors['m_epi'])
-    ax1.set_yscale('log')
-    ax1.grid(True, alpha=0.3, linewidth=0.5)
+    # Plot m (curvature bound)
+    ax.plot(n_samples, m, marker='o', markersize=4, 
+            color=color, linewidth=1.5, alpha=0.9)
+    ax.set_xlabel(r'Number of Samples $|\mathcal{S}^{(k)}|$')
+    ax.set_ylabel(r'Restricted Curvature')
+    ax.yaxis.set_label_coords(-0.075,0.5)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
     
-    # Plot M_ale on right y-axis
-    line2 = ax1_twin.plot(n_samples, M_ale, marker='s', markersize=4, 
-                          color=colors['M_ale'], linewidth=1.5, label=r'$M_{\mathrm{ale}}$', 
-                          alpha=0.9)
-    ax1_twin.set_ylabel(r'$M_{\mathrm{ale}}$', color=colors['M_ale'])
-    ax1_twin.tick_params(axis='y', labelcolor=colors['M_ale'])
-    ax1_twin.set_yscale('log')
+    # Add horizontal line at y=0 to separate concave/convex
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
     
-    # Add combined legend
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='best', frameon=False)
+    # Determine plot limits for shading
+    m_min = min(m)
+    m_max = max(m)
     
-    for spine in ax1.spines.values():
-        spine.set_linewidth(1.25)
-    for spine in ax1_twin.spines.values():
-        spine.set_linewidth(1.25)
+    # Ensure we have some margin even for small values
+    if abs(m_max - m_min) < 1e-10:
+        y_margin = 1.0  # Default margin if all values are the same
+        y_bottom = m_min - y_margin
+        y_top = m_max + y_margin
+    else:
+        y_margin = max(abs(m_max), abs(m_min)) * 0.2
+        if y_margin < 0.1:  # Ensure minimum visible margin
+            y_margin = 0.1
+        y_bottom = m_min - y_margin
+        y_top = m_max + y_margin
     
-    # Plot 2: Ratio m_epi / M_ale
-    ax2 = axes[1]
-    ax2.plot(n_samples, ratio, marker='D', markersize=4, 
-             color=colors['ratio'], linewidth=1.5, label=r'$m_{\mathrm{epi}}/M_{\mathrm{ale}}$', 
-             alpha=0.9)
-    ax2.set_xlabel('Number of Samples')
-    ax2.set_ylabel(r'$m_{\mathrm{epi}}/M_{\mathrm{ale}}$ (Curvature Ratio)', color=colors['ratio'])
-    ax2.tick_params(axis='y', labelcolor=colors['ratio'])
-    ax2.set_yscale('log')
-    ax2.grid(True, alpha=0.3, linewidth=0.5)
-    ax2.legend(loc='best', frameon=False)
-    top = 10 if min(ratio) > 1e-4 else 10000
-    ax2.set_ylim(top=top)  # Set upper limit for better visibility
+    # Fill regions: negative = concave (green), positive = convex (red)
+    if m_min < 0:
+        ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
     
-    # Fill the area above y=1.0 with green to indicate convex region
-    ax2.axhspan(1.0, top, color='green', alpha=0.1, zorder=0)
+    ax.axhspan(0, y_top, color='red', alpha=0.15, zorder=0)
     
-    ax2.axhline(y=1.0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
-
-    # Add "convex" text label slightly above the horizontal line
-    print(n_samples[0])
-    ax2.text(n_samples[0]*4/5, 2, 'convex', color='black', fontsize=9, 
-             verticalalignment='bottom')
+    ax.set_ylim(y_bottom, y_top)
+    ax.invert_xaxis()  # Invert x-axis to show decreasing samples
     
-    for spine in ax2.spines.values():
+    # Add text labels at left boundary
+    x_left = max(n_samples)  # Left boundary after inversion
+    if m_min < 0:
+        # Place "concave" text in the middle of the negative region
+        y_concave = 0 + (0 - y_top) * 0.5
+        ax.text(x_left, y_concave, 'concave', 
+                verticalalignment='center', horizontalalignment='left',
+                fontsize=9, color='darkgreen', weight='bold')
+    
+    # Place "convex" text in the middle of the positive region
+    y_convex = 0 + (y_top - 0) * 0.5
+    ax.text(x_left, y_convex, 'convex', 
+            verticalalignment='center', horizontalalignment='left',
+            fontsize=9, color='darkred', weight='bold')
+    
+    for spine in ax.spines.values():
         spine.set_linewidth(1.25)
     
-    plt.suptitle(title, fontsize=12, y=0.95)
+    plt.title(title, fontsize=12)
     plt.tight_layout()
     
     # Save the plot
@@ -928,3 +990,5 @@ def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bound
     fig.savefig(filepath, bbox_inches='tight', dpi=300)
     print(f"Curvature bounds plot saved to {filepath}")
     plt.show()
+
+

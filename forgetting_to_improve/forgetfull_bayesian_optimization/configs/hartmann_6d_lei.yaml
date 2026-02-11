@@ -13,7 +13,7 @@ bayes_opt:
     # algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
     algorithm: [none, joint, warped_gp, relevance_pursuit]
     method: sequential 
-    min_samples: 5
+    min_samples: 10
   kernel:
     - type: matern
       nu: 2.5

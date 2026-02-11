@@ -28,19 +28,16 @@ except ImportError:
 def initialize_relevance_pursuit_model(
     train_x: torch.Tensor,
     train_y: torch.Tensor,
-    kernel: Any = None,  # Keep for API compatibility but ignore
+    kernel: Any = None,
     device: str = 'cpu'
 ) -> Tuple[Any, Any]:
     """
     Initialize a Relevance Pursuit GP model.
     
-    Note: kernel parameter is ignored. RobustRelevancePursuitSingleTaskGP creates 
-    its own kernel internally for fair comparison with other papers.
-    
     Args:
         train_x: Training inputs (n, d)
         train_y: Training targets (n, 1) or (n,)
-        kernel: Ignored (kept for API compatibility)
+        kernel: Kernel (covar_module) for the GP
         device: Device for computation
         
     Returns:
@@ -67,11 +64,25 @@ def initialize_relevance_pursuit_model(
     n_train = len(train_x_double)
     prior_mean_of_support = int(0.2 * n_train)
     
-    # Create relevance pursuit model WITHOUT custom kernel - let BoTorch create its own
-    # This is how relevance pursuit is typically used in other papers
+    # Create kernel if not provided
+    if kernel is None:
+        n_dims = train_x_double.shape[-1]
+        if n_dims == 1:
+            kernel = gpytorch.kernels.ScaleKernel(
+                gpytorch.kernels.RBFKernel()
+            ).double()
+        else:
+            kernel = gpytorch.kernels.ScaleKernel(
+                gpytorch.kernels.RBFKernel(ard_num_dims=n_dims)
+            ).double()
+    else:
+        kernel = kernel.double()
+    
+    # Create relevance pursuit model with custom kernel
     rp_model = RobustRelevancePursuitSingleTaskGP(
         train_X=train_x_double,
         train_Y=train_y_double,
+        covar_module=kernel,
         convex_parameterization=True,
         cache_model_trace=False,
         prior_mean_of_support=prior_mean_of_support

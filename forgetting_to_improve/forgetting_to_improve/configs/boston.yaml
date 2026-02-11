@@ -6,21 +6,23 @@ experiment:
   # All 13 features of Boston Housing dataset (normalized scale with StandardScaler)
   # Features: CRIM, ZN, INDUS, CHAS, NOX, RM, AGE, DIS, RAD, TAX, PTRATIO, B, LSTAT
   # Normalized data centered at 0 with std ~1, so most values in [-3, 3]
-  # A_limits: Active learning region (central 40% of data: [-0.6, 0.6] for each feature)
+  # Target region with ~33 smooth points (selected from 8 smoothest)
+  # Mean local variance: 0.0149 (extremely smooth region)
+  # Target value range: [-0.472, 0.029] for smoothest points
   A_limits: [
-    [-0.7, 0.4],  # CRIM - crime rate
-    [-0.7, 0.4],  # ZN - residential land zoning
-    [-0.7, 0.4],  # INDUS - non-retail business acres
-    [-0.7, 0.4],  # CHAS - Charles River dummy
-    [-0.7, 0.4],  # NOX - nitric oxides concentration
-    [-0.7, 0.4],  # RM - average rooms per dwelling
-    [-0.7, 0.4],  # AGE - proportion old units
-    [-0.7, 0.4],  # DIS - distance to employment centers
-    [-0.7, 0.4],  # RAD - highway accessibility index
-    [-0.7, 0.4],  # TAX - property tax rate
-    [-0.7, 0.4],  # PTRATIO - pupil-teacher ratio
-    [-0.7, 0.4],  # B - proportion of blacks
-    [-0.7, 0.4]   # LSTAT - % lower status population
+    [ -0.417,   1.101],  # CRIM - crime rate
+    [ -0.488,   2.946],  # ZN - residential land zoning
+    [ -1.133,   1.016],  # INDUS - non-retail business acres
+    [ -0.274,  -0.272],  # CHAS - Charles River (binary: non-river properties)
+    [ -1.354,   0.219],  # NOX - nitric oxides concentration
+    [ -0.822,  -0.313],  # RM - average rooms per dwelling
+    [ -2.161,   0.698],  # AGE - proportion old units
+    [ -0.633,   1.339],  # DIS - distance to employment centers
+    [ -0.638,   1.661],  # RAD - highway accessibility index
+    [ -1.094,   1.531],  # TAX - property tax rate
+    [ -1.089,   1.176],  # PTRATIO - pupil-teacher ratio
+    [ -0.129,   0.441],  # B - proportion of blacks
+    [ -1.000,   0.436],  # LSTAT - % lower status population
   ]
   # X_limits: Full input space (covers ~99.7% of normalized data: [-3, 3] for each feature)
   X_limits: [
@@ -45,9 +47,10 @@ experiment:
   fixed_kernel: false
   show_plots: false  # No plots for multidimensional
   show_hessian: false
-  feature_subset: null  # Use all 13 features
+  feature_subset: null  # Use all features
   kernel:
-    - type: rbf
+    - type: 'matern'
+      nu: 2.5
       length_scale: 0.1
     - type: white
-      noise_level: 0.01
+      noise_level: 0.1

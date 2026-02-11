@@ -22,6 +22,7 @@ def run_single_experiment(config, method, objective_name, objective_func, object
         fixed_kernel=config['fixed_kernel'],
         show_plots=config['show_plots'] and not return_plot_data,  # Disable plots when collecting data for comparison
         show_hessian=config['show_hessian'],
+        compare_optimal=config.get('compare_optimal', False),
         calculate_convexity=config.get('calculate_convexity', False),
         objective_type=objective_type,
         feature_subset=config.get('feature_subset', None),

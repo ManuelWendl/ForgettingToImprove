@@ -1,0 +1,48 @@
+experiment:
+  type: statistic
+  method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
+  objective: yacht
+  noise: [joint, epistemic]
+  # Yacht Hydrodynamics dataset: Hull geometry and resistance prediction
+  # 6 features: LCB, PC, LDR, BDR, LBR, Froude number
+  # Target: Residuary resistance per unit weight of displacement
+  # Normalized data centered at 0 with std ~1
+  
+  # A_limits: Active learning region (smooth, low-noise region)
+  # Optimized region: 21 points with avg local variance 0.0039 (very smooth)
+  # Target value range: [-0.693, -0.650] with low std: 0.012
+  A_limits: [
+    [-0.052, 0.160],  # LCB - Longitudinal position of center of buoyancy
+    [-2.178, 1.607],  # PC - Prismatic coefficient
+    [-0.529, 1.688],  # LDR - Length-displacement ratio
+    [-0.716, 0.600],  # BDR - Beam-draught ratio
+    [-1.086, 1.758],  # LBR - Length-beam ratio
+    [-1.761, -0.967]  # Froude - Froude number
+  ]
+  
+  # X_limits: Full input space (covers ~99.7% of normalized data)
+  X_limits: [
+    [-5.0, 5.0],  # LCB
+    [-5.0, 5.0],  # PC
+    [-5.0, 5.0],  # LDR
+    [-5.0, 5.0],  # BDR
+    [-5.0, 5.0],  # LBR
+    [-5.0, 5.0]   # Froude
+  ]
+  
+  num_samples: 308  # Total number of data points in Yacht dataset
+  num_train_samples: 40  # Initial training samples
+  num_A_samples: 50      # Samples to select from active learning region
+  seed: 100              # Number of random seeds for statistical analysis
+  fixed_kernel: false
+  show_plots: false      # No plots for multidimensional data
+  show_hessian: false
+  feature_subset: null   # Use all 6 features
+  
+  # Kernel configuration for GP
+  kernel:
+    - type: 'matern'
+      nu: 2.5
+      length_scale: 0.1
+    - type: white
+      noise_level: 0.1

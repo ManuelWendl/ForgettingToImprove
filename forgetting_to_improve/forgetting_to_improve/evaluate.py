@@ -54,6 +54,7 @@ def evaluate(
     fixed_kernel: bool = True,
     show_plots: bool = False,
     show_hessian: bool = False,
+    compare_optimal: bool = False,
     calculate_convexity: bool = False,
     objective_type: str = 'function',
     feature_subset: Optional[Union[int, List[int]]] = None,
@@ -243,7 +244,7 @@ def evaluate(
     likelihood.eval()
     
     # Optimize the training samples by removing detrimental ones
-    curvature_history = {'m_epi': [], 'M_ale': [], 'ratio': [], 'n_samples': []}  # Initialize for all methods
+    curvature_history = {'m': [], 'n_samples': []}  # Initialize for all methods
     
     if method == 'none':
         x_samples_opt = x_samples
@@ -456,6 +457,7 @@ def evaluate(
             max_iter=len(x_samples) - 2,
             noise_type=noise,
             show_hessian=show_hessian,
+            compare_optimal=compare_optimal,
             calculate_convexity=calculate_convexity,
             A_limits=A_limits
         )
@@ -597,10 +599,10 @@ def evaluate(
         )
     
     # Plot curvature bounds if they were calculated
-    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m_epi'):
+    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m'):
         plot_curvature_bounds(
             curvature_history, 
-            title="Curvature Bound"
+            title="Restricted Curvature - Asymmetric"
         )
     
     # Return plot data if requested (for comparison plots)
