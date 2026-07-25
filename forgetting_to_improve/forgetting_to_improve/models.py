@@ -40,9 +40,12 @@ class ExactGPModel(gpytorch.models.ExactGP):
     Stores training inputs for use by heteroskedastic likelihood.
     """
     
-    def __init__(self, train_x, train_y, likelihood, covar_module):
+    def __init__(self, train_x, train_y, likelihood, covar_module, mean_module=None):
         super().__init__(train_x, train_y, likelihood)
-        self.mean_module = gpytorch.means.ConstantMean()
+        # Defaults to ConstantMean; a supplied mean_module (e.g. MLPMean, the
+        # linearisation centre f(x, theta*)) makes the model match laplax's
+        # linear pushforward N(f(x, theta*), J Sigma J^T).
+        self.mean_module = mean_module if mean_module is not None else gpytorch.means.ConstantMean()
         self.covar_module = covar_module
         # Store training inputs for likelihood access
         self.train_inputs = (train_x,)

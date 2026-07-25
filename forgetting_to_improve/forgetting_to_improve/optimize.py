@@ -10,6 +10,53 @@ from .curvature_bounds import calculate_curvature_bounds
 from .helper.plot_gp import visualize_hessian, plot_optimal_comparison
 
 
+def _finetune_kernel_mlp(model, x_samples, y_samples):
+    """Re-fit the NN (jacobian) kernel's MLP on the current retained set.
+
+    ``jac_finetune['mode']`` selects between continuing from theta* ('finetune')
+    and re-initialising the weights before training ('scratch'), the latter
+    making the re-fit independent of the features learned on the removed points.
+
+    No-op unless the covar_module carries a jacobian MLP (``jac_mlp``) and a
+    positive ``jac_finetune['epochs']`` -- so this is safe for RBF/matern kernels.
+    Since JacobianKernel and MLPMean share this MLP object and read it live, an
+    in-place update adapts both the kernel geometry and the GP mean after removal.
+    """
+    covar = model.covar_module
+    mlp = getattr(covar, 'jac_mlp', None)
+    ft = getattr(covar, 'jac_finetune', None)
+    if mlp is None or not ft or ft.get('epochs', 0) <= 0:
+        return
+
+    epochs, lr = ft['epochs'], ft['lr']
+    if ft.get('mode', 'finetune') == 'scratch':
+        from .helper.nn_kernel import reset_parameters
+        reset_parameters(mlp)
+    x = x_samples if x_samples.ndim == 2 else x_samples.unsqueeze(-1)
+    mdtype = next(mlp.parameters()).dtype
+    x = x.to(mdtype)
+    y = y_samples.reshape(-1, 1).to(mdtype)
+
+    for p in mlp.parameters():
+        p.requires_grad_(True)
+    opt = torch.optim.Adam(mlp.parameters(), lr=lr)
+    loss_fn = torch.nn.MSELoss()
+    mlp.train()
+    for _ in range(epochs):
+        opt.zero_grad()
+        loss = loss_fn(mlp(x), y)
+        loss.backward()
+        opt.step()
+    mlp.eval()
+    for p in mlp.parameters():
+        p.requires_grad_(False)
+
+    # Refresh the detached param snapshot used by the full-jacobian feature path.
+    base = getattr(covar, 'base_kernel', covar)
+    if hasattr(base, 'params'):
+        base.params = {k: v.detach() for k, v in mlp.named_parameters()}
+
+
 def select_worst_sample(
     model: gpytorch.models.GP,
     x_samples: torch.Tensor,
@@ -39,7 +86,7 @@ def select_worst_sample(
     if noise_type == 'joint':
         total = epistemic_influence + aleatoric_influence * factor
     elif noise_type == 'epistemic':
-        total = epistemic_influence
+       total = epistemic_influence
     elif noise_type == 'aleatoric':
         total = aleatoric_influence
     else:
@@ -111,8 +158,10 @@ def sequentially_optimize_samples(
         # Compute curvature for the sample about to be removed
         if calculate_convexity and index_to_remove is not None:
             try:
-                # Sparse directional curvature H[i,i] for sample i
-                m = calculate_curvature_bounds(model, x_samples, y_samples, A_limits,
+                # Sparse directional curvature H[i,i] for sample i.
+                # Integrate the Hessian over the A-region sample points (x_test),
+                # not the raw A_limits bounds.
+                m = calculate_curvature_bounds(model, x_samples, y_samples, x_test,
                                               next_removal_index=index_to_remove)
                 curvature_history['m'].append(m)
                 curvature_history['n_samples'].append(len(x_samples))
@@ -189,6 +238,10 @@ def sequentially_optimize_samples(
             
             optimal_test_uncertainty.append(best_uncertainty)
             
+        # For the NN (jacobian) kernel: fine-tune the MLP on the reduced dataset
+        # for a few epochs so the kernel adapts after this removal (no-op otherwise).
+        _finetune_kernel_mlp(model, x_samples, y_samples)
+
         # Refit model (just set training data, keep eval mode since we don't reoptimize hyperparameters)
         model.set_train_data(x_samples, y_samples, strict=False)
         model.train()

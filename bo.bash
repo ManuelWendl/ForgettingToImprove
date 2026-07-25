@@ -12,18 +12,43 @@ if [ -d ".venv" ]; then
 fi
 
 # Define the config directory
-CONFIG_DIR="forgetting_to_improve/forgetfull_bayesian_optimization/configs"
+CONFIG_DIR="forgetting_to_improve/forgetful_bayesian_optimization/configs"
 
 # Array of config files to run
-# CONFIGS=(
-#     "ackley_2d.yaml"
-#     "ackley_6d.yaml"
-#     "augmented_rosenbrock.yaml"
-#     "branin.yaml"
-#     "griewank.yaml"
-#     "hartmann_6d.yaml"
-#     "holder_table.yaml"
-#     "levy.yaml"
+CONFIGS=(
+    "ackley_2d.yaml"
+    "ackley_6d.yaml"
+    "augmented_rosenbrock.yaml"
+    "branin.yaml"
+    "griewank.yaml"
+    "hartmann_6d.yaml"
+    "holder_table.yaml"
+    "levy.yaml"
+    "ackley_2d_noisy.yaml"
+    "ackley_6d_noisy.yaml"
+    "augmented_rosenbrock_noisy.yaml"
+    "branin_noisy.yaml"
+    "griewank_noisy.yaml"
+    "hartmann_6d_noisy.yaml"
+    "holder_table_noisy.yaml"
+    "levy_noisy.yaml"
+    "ackley_2d_lei.yaml"
+    "ackley_6d_lei.yaml"
+    "augmented_rosenbrock_lei.yaml"
+    "branin_lei.yaml"
+    "griewank_lei.yaml"
+    "hartmann_6d_lei.yaml"
+    "holder_table_lei.yaml"
+    "levy_lei.yaml"
+    "ackley_2d_noisy_lei.yaml"
+    "ackley_6d_noisy_lei.yaml"
+    "augmented_rosenbrock_noisy_lei.yaml"
+    "branin_noisy_lei.yaml"
+    "griewank_noisy_lei.yaml"
+    "hartmann_6d_noisy_lei.yaml"
+    "holder_table_noisy_lei.yaml"
+    "levy_noisy_lei.yaml"
+    )
 #     # "rosenbrock.yaml"
 #     # "six_hump_camel.yaml"
 #     # "styblinski_tang_2d.yaml"
@@ -41,16 +66,16 @@ CONFIG_DIR="forgetting_to_improve/forgetfull_bayesian_optimization/configs"
     # "levy_noisy.yaml"
 # )
 
-CONFIGS=(
+# CONFIGS=(
     # "ackley_2d_noisy_lei.yaml"
     # "ackley_6d_noisy_lei.yaml"
-    "augmented_rosenbrock_noisy_lei.yaml"
-    "branin_noisy_lei.yaml"
-    "griewank_noisy_lei.yaml"
-    "hartmann_6d_noisy_lei.yaml"
-    "holder_table_noisy_lei.yaml"
-    "levy_noisy_lei.yaml"
-)
+#     "augmented_rosenbrock_noisy_lei.yaml"
+#     "branin_noisy_lei.yaml"
+#     "griewank_noisy_lei.yaml"
+#     "hartmann_6d_noisy_lei.yaml"
+#     "holder_table_noisy_lei.yaml"
+#     "levy_noisy_lei.yaml"
+# )
 
 # Start time
 START_TIME=$(date +%s)
@@ -69,7 +94,7 @@ for config in "${CONFIGS[@]}"; do
         echo "Time: $(date)"
         echo "=========================================="
         
-        python -m forgetting_to_improve.forgetfull_bayesian_optimization.main -c "$CONFIG_PATH"
+        python -m forgetting_to_improve.forgetful_bayesian_optimization.main -c "$CONFIG_PATH"
         
         EXIT_CODE=$?
         if [ $EXIT_CODE -ne 0 ]; then

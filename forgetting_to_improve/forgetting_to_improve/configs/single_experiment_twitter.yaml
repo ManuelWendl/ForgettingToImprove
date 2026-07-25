@@ -2,7 +2,7 @@ experiment:
   type: single
   method: sequential
   objective: twitter
-  noise: joint
+  noise: epistemic
   A_limits: [0.25, 0.9]
   X_limits: [-0.25, 1.0]
   num_samples: 405
@@ -11,9 +11,9 @@ experiment:
   seed: 5
   fixed_kernel: true
   show_plots: true
-  show_hessian: true
-  compare_optimal: true
-  calculate_convexity: true
+  show_hessian: false
+  compare_optimal: false
+  calculate_convexity: false
   kernel:
   - type: 'matern'
     nu: 2.5

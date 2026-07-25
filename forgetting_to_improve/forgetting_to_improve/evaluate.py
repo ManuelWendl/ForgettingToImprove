@@ -219,7 +219,8 @@ def evaluate(
                 {'type': 'white', 'noise_level': gp_alpha}
             ]
 
-    kernel, white_noise_level = create_kernel_from_config(kernel_config, n_dims, fixed_kernel, device)
+    kernel, white_noise_level = create_kernel_from_config(kernel_config, n_dims, fixed_kernel, device,
+                                                          train_x=x_samples, train_y=y_samples)
     
     # Convert to torch tensors
     x_samples_torch = torch.from_numpy(x_samples).float().to(device)
@@ -234,8 +235,14 @@ def evaluate(
     else:
         likelihood.noise = gp_alpha
     
-    # Note: likelihood noise is always trainable (will be optimized)    
-    model = ExactGPModel(x_samples_torch, y_samples_torch, likelihood, kernel)
+    # Note: likelihood noise is always trainable (will be optimized)
+    # For the jacobian kernel, use the network output as the GP mean (laplax
+    # linearisation centre f(x, theta*)); otherwise ConstantMean as before.
+    mean_module = None
+    if hasattr(kernel, 'jac_mlp'):
+        from .helper.nn_kernel import MLPMean
+        mean_module = MLPMean(kernel.jac_mlp).to(device)
+    model = ExactGPModel(x_samples_torch, y_samples_torch, likelihood, kernel, mean_module=mean_module)
     model = model.to(device)
     likelihood = likelihood.to(device)
     

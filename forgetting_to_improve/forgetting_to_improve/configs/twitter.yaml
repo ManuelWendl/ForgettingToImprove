@@ -2,7 +2,7 @@ experiment:
   type: statistic
   method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
   objective: twitter
-  noise: [joint, epistemic]
+  noise: [joint, aleatoric]
   # Twitter Flash Crash Dataset - DJIA prices on April 23, 2013
   # A fake tweet about an explosion at the White House caused a brief market crash around 1:10 PM
   # Original data: ~405 time points from 9:30 AM to 4:00 PM (390 minutes of trading)
@@ -31,4 +31,4 @@ experiment:
       nu: 2.5
       length_scale: 0.1
     - type: white
-      noise_level: 0.1
+      noise_level: 1

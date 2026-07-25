@@ -2,7 +2,7 @@ experiment:
   type: statistic
   method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
   objective: boston
-  noise: [joint, epistemic]
+  noise: [joint, aleatoric]
   # All 13 features of Boston Housing dataset (normalized scale with StandardScaler)
   # Features: CRIM, ZN, INDUS, CHAS, NOX, RM, AGE, DIS, RAD, TAX, PTRATIO, B, LSTAT
   # Normalized data centered at 0 with std ~1, so most values in [-3, 3]
@@ -53,4 +53,4 @@ experiment:
       nu: 2.5
       length_scale: 0.1
     - type: white
-      noise_level: 0.1
+      noise_level: 1

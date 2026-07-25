@@ -50,14 +50,18 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
     return objective_map[objective_name]
 
 
-def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: int) -> Any:
+def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: int,
+                              train_x=None, train_y=None) -> Any:
     """
     Create a GPyTorch kernel from configuration.
-    
+
     Args:
         kernel_configs: List of kernel configuration dictionaries
         input_dim: Input dimensionality
-        
+        train_x, train_y: Optional current BO data. Only used by the 'jacobian'
+            (last-layer linearised-Laplace) kernel, whose MLP is (re)trained on
+            them. Ignored by matern/rbf.
+
     Returns:
         GPyTorch kernel module
     """
@@ -101,6 +105,23 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
                 kernel.lengthscale = length_scale
             kernels.append(kernel)
             
+        elif kernel_type == 'jacobian':
+            # Last-layer linearised-Laplace (Jacobian) kernel: k(x,x') = phi(x) Sigma phi(x')^T.
+            # The MLP is retrained on the CURRENT BO data every time the model is
+            # re-initialised, so the features adapt as the loop acquires points.
+            from ...forgetting_to_improve.helper.nn_kernel import build_jacobian_kernel
+            if train_x is None:
+                raise ValueError("jacobian kernel requires train_x/train_y to fit its MLP")
+            jac, _mlp = build_jacobian_kernel(
+                kernel_config, input_dim,
+                train_x=train_x.detach().cpu().numpy(),
+                train_y=train_y.detach().cpu().numpy().ravel(),
+            )
+            # Jacobian features have arbitrary amplitude (no lengthscale), so the
+            # outputscale is the free scale -- fitted by fit_gpytorch_mll.
+            jac = ScaleKernel(jac).to(train_x.dtype)
+            kernels.append(jac)
+
         elif kernel_type == 'white':
             # White noise kernel is handled via likelihood
             continue
@@ -140,8 +161,9 @@ def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor,
     kernel_configs = get_kernel_config(config)
     input_dim = train_x.shape[-1]
     
-    # Create covariance module from config
-    covar_module = create_kernel_from_config(kernel_configs, input_dim)
+    # Create covariance module from config. train_x/train_y are forwarded so the
+    # jacobian kernel can (re)fit its MLP on the current data; no-op for matern/rbf.
+    covar_module = create_kernel_from_config(kernel_configs, input_dim, train_x, train_y)
     
     # Create likelihood with noise constraint and prior for stability
     noise_level = config.get('alpha', 0.0)

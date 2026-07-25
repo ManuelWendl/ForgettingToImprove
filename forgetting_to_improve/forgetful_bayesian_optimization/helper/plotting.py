@@ -77,6 +77,52 @@ def _style_axis(ax):
     ax.xaxis.set_major_formatter(x_formatter)
 
 
+def _uses_nn_kernel(config) -> bool:
+    """True if the experiment uses the linearised-Laplace (NN/jacobian) kernel."""
+    kernel = (config or {}).get('kernel')
+    if not kernel:
+        return False
+    if isinstance(kernel, dict):
+        kernel = [kernel]
+    return any(isinstance(k, dict) and str(k.get('type', '')).lower() == 'jacobian'
+               for k in kernel)
+
+
+def _config_suffix(config) -> str:
+    """Filename suffix distinguishing the lei/noisy/noisy_lei config variants.
+
+    Plain UCB + noise-free is ''; qLogExpectedImprovement adds '_lei', a
+    'perturbation' block (corrupted observations) adds '_noisy', combined
+    gives '_noisy_lei' -- matching the configs/*_noisy_lei.yaml naming.
+    """
+    config = config or {}
+    is_lei = str(config.get('acquisition', '')) == 'qLogExpectedImprovement'
+    is_noisy = bool(config.get('perturbation'))
+    if is_noisy and is_lei:
+        return '_noisy_lei'
+    if is_noisy:
+        return '_noisy'
+    if is_lei:
+        return '_lei'
+    return ''
+
+
+def _method_label(method: str, config=None, newline: bool = False) -> str:
+    """Legend label for a forgetting method.
+
+    With the NN (jacobian) kernel the GP baselines are last-layer linearised
+    Laplace models, so 'none'/'joint' read as Homoscedastic / Forgetful LLL
+    instead of Homoscedastic GP / Forgetful BO.
+    """
+    nn = _uses_nn_kernel(config)
+    if method == 'none':
+        base = 'Homoscedastic LLL' if nn else 'Homoscedastic GP'
+        return base.replace(' ', '\n') if newline else base
+    if method == 'joint':
+        return 'Forgetful LLL' if nn else 'Forgetful BO'
+    return method.capitalize().replace('_', '\n' if newline else ' ')
+
+
 def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str) -> None:
     """
     Create plots of the results.
@@ -91,13 +137,14 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     
     Path(plot_path).mkdir(parents=True, exist_ok=True)
     colors = _get_color_palette()
-    
+    suffix = _config_suffix(config)
+
     # Get methods from results, with 'joint' (Forgetful BO) first
     methods = list(results.keys())
     if 'joint' in methods:
         methods.remove('joint')
         methods.insert(0, 'joint')
-    
+
     # Get number of iterations from first method
     first_method = methods[0]
     n_iters = len(results[first_method]['simple_regret']['mean'])
@@ -118,7 +165,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         
         # Mean line
         ax.semilogy(iterations, stats['simple_regret']['mean'], 
-                   color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
+                   color=method_color, linewidth=2, label=_method_label(method, config))
         
         # Std bands with light fill + hatching
         mean_regret = stats['simple_regret']['mean']
@@ -150,7 +197,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/simple_regret_{config['objective']}.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{plot_path}/simple_regret_{config['objective']}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot cumulative regret
@@ -167,7 +214,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         all_means.extend(mean_cumulative)
         
         ax.plot(iterations, mean_cumulative, 
-               color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
+               color=method_color, linewidth=2, label=_method_label(method, config))
         
         # Std bands with light fill
         ax.fill_between(iterations,
@@ -193,7 +240,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/cumulative_regret_{config['objective']}.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{plot_path}/cumulative_regret_{config['objective']}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot best values
@@ -210,7 +257,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
         all_means.extend(mean_best)
         
         ax.plot(iterations, mean_best, 
-               color=method_color, linewidth=2, label=f'{method.capitalize().replace('_', ' ') if method not in ["none", "joint"] else ("Homoscedastic GP" if method == "none" else "Forgetful BO")}')
+               color=method_color, linewidth=2, label=_method_label(method, config))
         
         # Std bands with light fill
         ax.fill_between(iterations,
@@ -238,7 +285,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/best_values_{config['objective']}.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{plot_path}/best_values_{config['objective']}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Plots saved to {plot_path}")
@@ -278,13 +325,9 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
         all_methods.remove('joint')
         all_methods.insert(0, 'joint')
     
-    # Create method name mapping
-    method_labels = {}
-    for method in all_methods:
-        if method in ["none", "joint"]:
-            method_labels[method] = "Homoscedastic GP" if method == "none" else "Forgetful BO"
-        else:
-            method_labels[method] = method.capitalize().replace('_', ' ')
+    # Create method name mapping (use a NN-kernel config if any experiment uses one)
+    rep_config = next((d['config'] for d in all_data if _uses_nn_kernel(d['config'])), None)
+    method_labels = {method: _method_label(method, rep_config) for method in all_methods}
     
     # Calculate figure size
     fig_width = figsizes.iclr2023(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.1)['figure.figsize'][0]
@@ -508,13 +551,14 @@ def plot_runtime_statistics(results: Dict[str, Any], config: Dict[str, Any], plo
     
     Path(plot_path).mkdir(parents=True, exist_ok=True)
     colors = _get_color_palette()
-    
+    suffix = _config_suffix(config)
+
     # Get methods from results, with 'joint' (Forgetful BO) first
     methods = list(results.keys())
     if 'joint' in methods:
         methods.remove('joint')
         methods.insert(0, 'joint')
-    
+
     # Check if timing data is available
     has_timing = all('timing' in results[method] for method in methods)
     if not has_timing:
@@ -536,12 +580,7 @@ def plot_runtime_statistics(results: Dict[str, Any], config: Dict[str, Any], plo
         max_times.append(timing['max'])
         
         # Create nice label
-        if method == 'none':
-            method_labels.append('Homoscedastic\nGP')
-        elif method == 'joint':
-            method_labels.append('Forgetful BO')
-        else:
-            method_labels.append(method.capitalize().replace('_', '\n'))
+        method_labels.append(_method_label(method, config, newline=True))
     
     # Create figure with 2x2 subplots (mean±std, min, max, total time)
     fig, axes = plt.subplots(2, 2, figsize=(figsizes.iclr2023(nrows=1, ncols=1)['figure.figsize'][0], 
@@ -615,7 +654,7 @@ def plot_runtime_statistics(results: Dict[str, Any], config: Dict[str, Any], plo
                  y=1.02, fontsize=12)
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.15)
-    plt.savefig(f"{plot_path}/runtime_statistics_{config['objective']}.pdf", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{plot_path}/runtime_statistics_{config['objective']}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Runtime statistics plot saved to {plot_path}")
@@ -654,15 +693,10 @@ def plot_multiple_runtime_statistics(all_data: list, plot_path: str) -> None:
         all_methods.remove('joint')
         all_methods.insert(0, 'joint')
     
-    # Create method name mapping
-    method_labels = {}
-    for method in all_methods:
-        if method == 'none':
-            method_labels[method] = 'Homoscedastic\nGP'
-        elif method == 'joint':
-            method_labels[method] = 'Forgetful BO'
-        else:
-            method_labels[method] = method.capitalize().replace('_', '\n')
+    # Create method name mapping (use a NN-kernel config if any experiment uses one)
+    rep_config = next((d['config'] for d in all_data if _uses_nn_kernel(d['config'])), None)
+    method_labels = {method: _method_label(method, rep_config, newline=True)
+                     for method in all_methods}
     
     # Calculate figure size
     fig_width = figsizes.iclr2023(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.5)['figure.figsize'][0]

@@ -2,7 +2,7 @@ experiment:
   type: statistic
   method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
   objective: yacht
-  noise: [joint, epistemic]
+  noise: [joint, aleatoric]
   # Yacht Hydrodynamics dataset: Hull geometry and resistance prediction
   # 6 features: LCB, PC, LDR, BDR, LBR, Froude number
   # Target: Residuary resistance per unit weight of displacement
@@ -45,4 +45,4 @@ experiment:
       nu: 2.5
       length_scale: 0.1
     - type: white
-      noise_level: 0.1
+      noise_level: 1
