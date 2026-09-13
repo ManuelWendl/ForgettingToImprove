@@ -1,0 +1,19 @@
+defaults:
+  - algorithm: sac
+  - overrides: mbpo_cartpole_swingup
+  - _self_
+
+seed: ${overrides.seed}
+device: "cuda:0"
+evaluation_interval: 1
+save_video: false
+debug_mode: false
+
+experiment: pure_sac
+
+root_dir: "./exp"
+hydra:
+  run:
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
+  sweep:
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}

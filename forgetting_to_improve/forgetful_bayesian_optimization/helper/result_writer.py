@@ -117,22 +117,27 @@ def save_learning_history(results: Dict[str, Any], config: Dict[str, Any], resul
     
     # Save as JSON (human-readable, for inspection)
     json_path = base_path + '_history.json'
+
+    def numpy_to_json_serializable(obj):
+        """Recursively convert numpy arrays to lists for JSON serialization."""
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {key: numpy_to_json_serializable(value) for key, value in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [numpy_to_json_serializable(item) for item in obj]
+        else:
+            return obj
+
     json_data = {
         'config': config,
-        'results': {}
+        'results': numpy_to_json_serializable(results)
     }
-    
-    # Convert numpy arrays to lists for JSON serialization
-    for method_name, stats in results.items():
-        json_data['results'][method_name] = {}
-        for metric_name, metric_stats in stats.items():
-            json_data['results'][method_name][metric_name] = {}
-            for stat_type, values in metric_stats.items():
-                if isinstance(values, np.ndarray):
-                    json_data['results'][method_name][metric_name][stat_type] = values.tolist()
-                else:
-                    json_data['results'][method_name][metric_name][stat_type] = values
-    
+
     with open(json_path, 'w') as f:
         json.dump(json_data, f, indent=2)
     print(f"Learning history (JSON) saved to {json_path}")
@@ -160,16 +165,21 @@ def load_learning_history(results_path: str) -> Dict[str, Any]:
 
 
 
-def compute_statistics(all_results: List[List[float]], optimal_value: float, 
-                      all_iteration_times: List[List[float]] = None) -> Dict[str, Any]:
+def compute_statistics(all_results: List[List[float]], optimal_value: Any,
+                      all_iteration_times: List[List[float]] = None,
+                      task_schedule: List = None) -> Dict[str, Any]:
     """
     Compute statistics across multiple random seeds.
-    
+
     Args:
         all_results: List of best observed values for each seed
-        optimal_value: Optimal value of the objective
+        optimal_value: Optimal value of the objective. May be a scalar (same
+            optimum for every iteration) or an array/list of length equal to
+            the number of iterations (to support changing tasks).
         all_iteration_times: List of iteration times for each seed (optional)
-        
+        task_schedule: List mapping iteration index to task_id (optional).
+            If provided, computes per-task regret statistics.
+
     Returns:
         Dictionary containing statistics
     """
@@ -209,7 +219,51 @@ def compute_statistics(all_results: List[List[float]], optimal_value: float,
             'max': np.max(all_best_values, axis=0),
         }
     }
-    
+
+    # Compute per-task statistics if task schedule provided
+    if task_schedule is not None:
+        task_schedule_arr = np.array(task_schedule)
+        unique_tasks = np.unique(task_schedule_arr)
+
+        per_task_stats = {}
+        for task_id in unique_tasks:
+            # Find indices for this task
+            task_mask = task_schedule_arr == task_id
+            task_indices = np.where(task_mask)[0]
+
+            if len(task_indices) == 0:
+                continue
+
+            # Extract regrets for this task across all seeds
+            task_simple_regrets = all_simple_regrets[:, task_mask]
+            task_cumulative_regrets = all_cumulative_regrets[:, task_mask]
+            task_best_values = all_best_values[:, task_mask]
+
+            per_task_stats[str(task_id)] = {
+                'simple_regret': {
+                    'mean': np.mean(task_simple_regrets, axis=0),
+                    'std': np.std(task_simple_regrets, axis=0),
+                    'final_mean': np.mean(task_simple_regrets[:, -1]),
+                    'final_std': np.std(task_simple_regrets[:, -1]),
+                },
+                'cumulative_regret': {
+                    'mean': np.mean(task_cumulative_regrets, axis=0),
+                    'std': np.std(task_cumulative_regrets, axis=0),
+                    'final_mean': np.mean(task_cumulative_regrets[:, -1]),
+                    'final_std': np.std(task_cumulative_regrets[:, -1]),
+                },
+                'best_values': {
+                    'mean': np.mean(task_best_values, axis=0),
+                    'std': np.std(task_best_values, axis=0),
+                    'final_mean': np.mean(task_best_values[:, -1]),
+                    'final_std': np.std(task_best_values[:, -1]),
+                },
+                'num_iterations': len(task_indices),
+                'iteration_range': (int(task_indices[0]), int(task_indices[-1])),
+            }
+
+        stats['per_task'] = per_task_stats
+
     # Add timing statistics if available
     if all_iteration_times is not None and len(all_iteration_times) > 0:
         all_times = np.array(all_iteration_times)
@@ -243,5 +297,36 @@ def compute_regret(best_observed: List[float], optimal_value: float) -> Tuple[np
     best_observed_array = np.array(best_observed)
     simple_regret = optimal_value - best_observed_array
     cumulative_regret = np.cumsum(simple_regret)
-    
+
+    return simple_regret, cumulative_regret
+# The original compute_regret function above is left in place for
+# backward-compatibility (it will be overridden by this definition when
+# the module is imported).  We redefine it immediately below to support
+# per-iteration optimal values required by the continuous CSV benchmark.
+
+# replacement compute_regret with support for per-iteration optima and
+# non-negative clipping.  Placed at end so it overrides the original
+# simple version defined above.
+def compute_regret(best_observed: List[float], optimal_value: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute simple and cumulative regret with flexible optimum.
+
+    Args:
+        best_observed: List of best values seen per iteration.
+        optimal_value: Scalar or sequence of optima (one per iteration).
+    Returns:
+        simple_regret, cumulative_regret arrays (both non-negative).
+    """
+    best_observed_array = np.array(best_observed)
+
+    if np.isscalar(optimal_value):
+        simple_regret = optimal_value - best_observed_array
+    else:
+        opt_arr = np.array(optimal_value)
+        if opt_arr.shape != best_observed_array.shape:
+            raise ValueError("Length of optimal_value array must match number of iterations")
+        simple_regret = opt_arr - best_observed_array
+
+    # ensure regret is never negative
+    simple_regret = np.maximum(simple_regret, 0.0)
+    cumulative_regret = np.cumsum(simple_regret)
     return simple_regret, cumulative_regret

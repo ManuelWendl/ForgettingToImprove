@@ -5,8 +5,9 @@ from itertools import combinations
 from .uncertainty import (
     calculate_uncertainty_influence,
     calculate_aleatoric_hessian,
+    calculate_epistemic_hessian,
 )
-from .curvature_bounds import calculate_curvature_bounds
+from .curvature_bounds import calculate_restricted_curvature_bounds
 from .helper.plot_gp import visualize_hessian, plot_optimal_comparison
 
 
@@ -131,12 +132,16 @@ def sequentially_optimize_samples(
         x_samples: Optimized training inputs
         y_samples: Optimized training targets
         deleted_x_samples: List of removed samples
-        curvature_history: Dictionary with 'm' list (empty if calculate_convexity=False)
+        curvature_history: Dictionary with keys 'm' (diagonal curvature of the
+            point removed at that step), 'lambda_min'/'lambda_max' (spectral
+            bounds of the submatrix restricted to that step's *and all later*
+            removals -- R_k = T ∩ S^(k), see calculate_restricted_curvature_bounds),
+            and 'n_samples'. Empty lists if calculate_convexity=False.
     """
     deleted_x_samples = []
     deleted_y_samples = []
-    curvature_history = {'m': [], 'n_samples': []}
-    
+    curvature_history = {'m': [], 'lambda_min': [], 'lambda_max': [], 'n_samples': []}
+
     # Store original full dataset for optimal comparison
     if compare_optimal:
         original_x = x_samples.clone()
@@ -144,55 +149,48 @@ def sequentially_optimize_samples(
         fti_test_uncertainty = []
         optimal_test_uncertainty = []
 
-    
     # Compute initial curvature bounds if requested
     if calculate_convexity:
         if A_limits is None:
             raise ValueError("A_limits must be provided when calculate_convexity=True")
-    
+
+    # Curvature bounds need the *full* eventual removal set T (R_k = T ∩ S^(k)
+    # at every step k, see Section M / Lemma 5), which is only known once the
+    # greedy removal loop below has run to completion. So the loop below only
+    # records *which original sample* is removed at each step (removal_order,
+    # via orig_idx tracking each row's position in the initial x_samples/
+    # y_samples); the actual H_R(S^(k)) submatrices are computed afterwards
+    # in a second, retrospective pass that replays this exact removal order.
+    x_samples_0 = x_samples.clone()
+    y_samples_0 = y_samples.clone()
+    orig_idx = torch.arange(len(x_samples), device=x_samples.device)
+    removal_order = []
+
     for iteration in range(max_iter):
         index_to_remove, epistemic, aleatoric = select_worst_sample(
             model, x_samples, y_samples, x_test, noise_type=noise_type
         )
-        
-        # Compute curvature for the sample about to be removed
-        if calculate_convexity and index_to_remove is not None:
-            try:
-                # Sparse directional curvature H[i,i] for sample i.
-                # Integrate the Hessian over the A-region sample points (x_test),
-                # not the raw A_limits bounds.
-                m = calculate_curvature_bounds(model, x_samples, y_samples, x_test,
-                                              next_removal_index=index_to_remove)
-                curvature_history['m'].append(m)
-                curvature_history['n_samples'].append(len(x_samples))
-                print(f"Iter {iteration+1}: Removing sample {index_to_remove}, H[{index_to_remove},{index_to_remove}]={m:.6e}, n_samples={len(x_samples)}")
-            except Exception as e:
-                print(f"Warning: Could not compute curvature bounds at iteration {iteration+1}: {e}")
-        
+
         if show_hessian and x_samples.shape[1] == 1:
             # Only show hessian for 1D case
-            kernel = model.covar_module
-            noise_level = likelihood.noise.item() if hasattr(likelihood, 'noise') else 1e-8
-            with torch.no_grad():
-                K = kernel(x_samples, x_samples).evaluate()
-            A = K + noise_level * torch.eye(len(x_samples), device=x_samples.device)
-            A_inv = torch.inverse(A)
-            H = calculate_aleatoric_hessian(A_inv, y_samples)
-            visualize_hessian(H, aleatoric, epistemic, index_to_remove, 
+            H = calculate_aleatoric_hessian(y_samples, model, x_samples)
+            visualize_hessian(H, aleatoric, epistemic, index_to_remove,
                               title=f"Hessian Iteration {iteration + 1}_{noise_type}")
-        
+
         if index_to_remove is None:
             break
-        
+
         deleted_x_samples.append(x_samples[index_to_remove].clone())
         deleted_y_samples.append(y_samples[index_to_remove].clone())
-        
+        removal_order.append(int(orig_idx[index_to_remove].item()))
+
         # Remove sample
         mask = torch.ones(len(x_samples), dtype=torch.bool, device=x_samples.device)
         mask[index_to_remove] = False
         x_samples = x_samples[mask]
         y_samples = y_samples[mask]
-        
+        orig_idx = orig_idx[mask]
+
         if len(x_samples) <= 1:
             print("Cannot remove more samples (would leave less than 2 samples)")
             break
@@ -243,6 +241,52 @@ def sequentially_optimize_samples(
         _finetune_kernel_mlp(model, x_samples, y_samples)
 
         # Refit model (just set training data, keep eval mode since we don't reoptimize hyperparameters)
+        model.set_train_data(x_samples, y_samples, strict=False)
+        model.train()
+        likelihood.train()
+
+    # Retrospective Pass 2: now that the full removal order T is known, replay
+    # it from the original dataset and, at each step k, compute curvature
+    # restricted to R_k = T ∩ S^(k) -- this step's removal *and* every later
+    # one still present -- rather than only the diagonal entry of the single
+    # point picked at step k (see calculate_restricted_curvature_bounds).
+    # The greedy removal decisions themselves are unaffected: they were
+    # already made above using the cheap first-order influence measures.
+    if calculate_convexity and removal_order:
+        x_r = x_samples_0
+        y_r = y_samples_0
+        idx_r = orig_idx.new_tensor(range(len(x_samples_0)))
+
+        for k, removed_orig_idx in enumerate(removal_order):
+            current_pos = int((idx_r == removed_orig_idx).nonzero(as_tuple=True)[0].item())
+            future_orig = set(removal_order[k:])
+            removal_indices = [i for i, oi in enumerate(idx_r.tolist()) if oi in future_orig]
+
+            try:
+                model.set_train_data(x_r, y_r, strict=False)
+                m_diag, lambda_min, lambda_max = calculate_restricted_curvature_bounds(
+                    model, x_r, y_r, x_test, removal_indices, current_index=current_pos
+                )
+                curvature_history['m'].append(m_diag)
+                curvature_history['lambda_min'].append(lambda_min)
+                curvature_history['lambda_max'].append(lambda_max)
+                curvature_history['n_samples'].append(len(x_r))
+                sample_coords = x_r[current_pos].detach().cpu().numpy()
+                print(f"Removal step {k + 1}/{len(removal_order)}: sample at x={sample_coords}, "
+                      f"H[i,i]={m_diag:.6e}, restricted to {len(removal_indices)} future removal(s): "
+                      f"lambda_min={lambda_min:.6e}, lambda_max={lambda_max:.6e}, n_samples={len(x_r)}")
+            except Exception as e:
+                print(f"Warning: Could not compute restricted curvature bounds at step {k + 1}: {e}")
+
+            mask = torch.ones(len(x_r), dtype=torch.bool, device=x_r.device)
+            mask[current_pos] = False
+            x_r = x_r[mask]
+            y_r = y_r[mask]
+            idx_r = idx_r[mask]
+
+        # Pass 2's last set_train_data call left the model on the
+        # second-to-last subset; restore it to the actual final state
+        # returned below.
         model.set_train_data(x_samples, y_samples, strict=False)
         model.train()
         likelihood.train()
@@ -311,8 +355,15 @@ def batch_optimize_samples(
         print(f"Removing {len(negative_indices)} samples with negative influence")
         mask = torch.ones(len(x_samples), dtype=torch.bool, device=x_samples.device)
         mask[negative_indices] = False
+        x_deleted = x_samples[~mask]
+        y_deleted = y_samples[~mask]
         x_samples = x_samples[mask]
         y_samples = y_samples[mask]
+        
+    else:
+        print("No samples with negative influence found")
+        x_deleted = torch.tensor([], device=x_samples.device)
+        y_deleted = torch.tensor([], device=y_samples.device)
     
     print(f"Final number of samples: {len(x_samples)}")
-    return x_samples, y_samples
+    return x_samples, y_samples, x_deleted, y_deleted

@@ -7,10 +7,22 @@ import os
 import numpy as np
 from scipy import stats
 
-def plot_predictions_comparison(objective_function, x, comparison_data, x_limits, A_limits, title=None, annotation=False):
+def _uses_jacobian_kernel(kernel_config) -> bool:
+    """True if a kernel_config (list of {'type': ..., ...} dicts, as parsed
+    from a comparison_*_jacobian.yaml's `kernel:` block) includes the
+    linearised-Laplace / Jacobian kernel."""
+    if not kernel_config:
+        return False
+    if isinstance(kernel_config, dict):
+        kernel_config = [kernel_config]
+    return any(isinstance(k, dict) and str(k.get('type', '')).lower() == 'jacobian'
+               for k in kernel_config)
+
+
+def plot_predictions_comparison(objective_function, x, comparison_data, x_limits, A_limits, title=None, annotation=False, usetex=False):
     """
     Plot multiple GP predictions side-by-side with shared legend using ICLR 2023 style.
-    
+
     Args:
         objective_function: The true objective function
         x: Test points
@@ -20,12 +32,17 @@ def plot_predictions_comparison(objective_function, x, comparison_data, x_limits
         A_limits: Limits for the region box
         title: Base title for the plot
         annotation: Whether to annotate sample indices
+        usetex: If True, render text with a real LaTeX install instead of
+            matplotlib's mathtext (used for the jacobian/NN-kernel
+            comparison plots); defaults to False elsewhere to avoid
+            requiring a LaTeX install.
     """
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": usetex})
     plt.rcParams.update({"legend.frameon": False})
     
     n_methods = len(comparison_data)
@@ -169,6 +186,8 @@ def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std,
     plt.rcParams.update(theme)
     plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=1))  # Changed to ncols=2 for side-by-side
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
 
     halfsided = False
@@ -296,6 +315,8 @@ def plot_per_kernel_predictions(objective_function, x, x_samples, y_samples, y_p
     plt.rcParams.update(theme)
     plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=2))
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
     
     # Create figure
@@ -493,6 +514,8 @@ def visualize_hessian(H, v, u, removed_point, title="Hessian Matrix"):
     plt.rcParams.update(theme)
     plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=1))
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
     
     # Create figure with proper ICLR styling for 3 subplots with equal heights
@@ -586,6 +609,8 @@ def plot_calibration_curve(p_levels, p_hat, title="Calibration Curve"):
     plt.rcParams.update(theme)
     plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=3))
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
     
     # Create figure with proper ICLR styling
@@ -626,10 +651,10 @@ def plot_calibration_curve(p_levels, p_hat, title="Calibration Curve"):
     plt.close()
 
 
-def plot_calibration_comparison(objective_function, x, comparison_data, title=None, A_limits=None):
+def plot_calibration_comparison(objective_function, x, comparison_data, title=None, A_limits=None, usetex=False):
     """
     Plot calibration curves for multiple methods side-by-side using ICLR 2023 style.
-    
+
     Args:
         objective_function: The true objective function
         x: Test points
@@ -638,12 +663,17 @@ def plot_calibration_comparison(objective_function, x, comparison_data, title=No
         title: Base title for the plot
         A_limits: Target region limits (tuple for 1D or list of tuples for multidimensional)
                   If provided, calibration is computed only within this region
+        usetex: If True, render text with a real LaTeX install instead of
+            matplotlib's mathtext (used for the jacobian/NN-kernel
+            comparison plots); defaults to False elsewhere to avoid
+            requiring a LaTeX install.
     """
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": usetex})
     plt.rcParams.update({"legend.frameon": False})
     
     n_methods = len(comparison_data)
@@ -786,6 +816,8 @@ def visualize_per_kernel_influence(epistemic_influences, title="Per-Kernel Influ
     plt.rcParams.update(theme)
     plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=2))
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})      
 
     n_test_points = 10
@@ -840,6 +872,8 @@ def plot_optimal_comparison(fti_uncertainty, optimal_uncertainty, n_samples_list
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
     
     # Create single plot
@@ -892,103 +926,454 @@ def plot_optimal_comparison(fti_uncertainty, optimal_uncertainty, n_samples_list
 
 def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
     """
-    Plot the evolution of curvature bound m during sample removal.
-    
+    Plot the evolution of the *restricted* curvature bounds during sample
+    removal, matching Figure 25 / Section M ("Experimental Validation of
+    Concavity") of the paper: at each removal step k, lambda_min/lambda_max
+    are the spectral bounds of the Hessian submatrix restricted to R_k =
+    T ∩ S^(k) (this step's removal *and* every later one still present), not
+    just the diagonal entry of the single point removed at that step -- see
+    calculate_restricted_curvature_bounds. These correspond directly to
+    -M_R and -m_R in Lemma 5: for the RSC/RSM guarantee of Theorem 1 to
+    hold, both curves should stay negative (concave) throughout.
+
     Args:
-        curvature_history: Dictionary with keys 'm', 'n_samples'
+        curvature_history: Dictionary with keys 'lambda_min', 'lambda_max',
+            'm' (single-point diagonal, kept for reference), and 'n_samples'.
         title: Plot title
     """
-    if not curvature_history or not curvature_history.get('m'):
+    if not curvature_history or not curvature_history.get('lambda_max'):
         print("No curvature history to plot")
         return
-    
+
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    # Disable LaTeX to avoid requiring dvipng/latex installation
+    plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
-    
+
     # Create single plot
-    fig, ax = plt.subplots(1, 1, 
+    fig, ax = plt.subplots(1, 1,
                           figsize=(figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.5)['figure.figsize']))
-    
-    # Define color
-    color = "#1D6996"  # Blue
-    
+
+    color_min = "#1D6996"  # Blue
+    color_max = "#CC503E"  # Red
+
     n_samples = np.array(curvature_history['n_samples'])
-    m = np.flip(np.cumsum(np.flip(np.array(curvature_history['m']))))
-    
+    lambda_min = np.array(curvature_history['lambda_min'])
+    lambda_max = np.array(curvature_history['lambda_max'])
+
     # Debug output
-    print(f"Plotting curvature with {len(n_samples)} points")
+    print(f"Plotting restricted curvature with {len(n_samples)} points")
     print(f"n_samples range: {min(n_samples)} to {max(n_samples)}")
-    print(f"m range: {min(m)} to {max(m)}")
-    
-    # Plot m (curvature bound)
-    ax.plot(n_samples, m, marker='o', markersize=4, 
-            color=color, linewidth=1.5, alpha=0.9)
+    print(f"lambda_min range: {lambda_min.min()} to {lambda_min.max()}")
+    print(f"lambda_max range: {lambda_max.min()} to {lambda_max.max()}")
+
+    # Plot lambda_min and lambda_max of the R_k-restricted submatrix
+    ax.plot(n_samples, lambda_min, marker='o', markersize=4,
+            color=color_min, linewidth=1.5, alpha=0.9, label=r'$\lambda_{\min}(H_R)$')
+    ax.plot(n_samples, lambda_max, marker='s', markersize=4,
+            color=color_max, linewidth=1.5, alpha=0.9, label=r'$\lambda_{\max}(H_R)$')
     ax.set_xlabel(r'Number of Samples $|\mathcal{S}^{(k)}|$')
     ax.set_ylabel(r'Restricted Curvature')
-    ax.yaxis.set_label_coords(-0.075,0.5)
+    ax.yaxis.set_label_coords(-0.075, 0.5)
     ax.grid(True, alpha=0.3, linewidth=0.5)
-    
+    ax.legend(loc='best', fontsize=8)
+
     # Add horizontal line at y=0 to separate concave/convex
     ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
-    
-    # Determine plot limits for shading
-    m_min = min(m)
-    m_max = max(m)
-    
+
+    # Determine plot limits for shading, based on both curves
+    all_vals = np.concatenate([lambda_min, lambda_max])
+    v_min = all_vals.min()
+    v_max = all_vals.max()
+
     # Ensure we have some margin even for small values
-    if abs(m_max - m_min) < 1e-10:
+    if abs(v_max - v_min) < 1e-10:
         y_margin = 1.0  # Default margin if all values are the same
-        y_bottom = m_min - y_margin
-        y_top = m_max + y_margin
+        y_bottom = v_min - y_margin
+        y_top = v_max + y_margin
     else:
-        y_margin = max(abs(m_max), abs(m_min)) * 0.2
+        y_margin = max(abs(v_max), abs(v_min)) * 0.2
         if y_margin < 0.1:  # Ensure minimum visible margin
             y_margin = 0.1
-        y_bottom = m_min - y_margin
-        y_top = m_max + y_margin
-    
-    # Fill regions: negative = concave (green), positive = convex (red)
-    if m_min < 0:
+        y_bottom = v_min - y_margin
+        y_top = v_max + y_margin
+
+    # Fill regions: negative = concave (green), positive = convex (red).
+    # Concavity of the *entire* submatrix (Lemma 5's RSC guarantee) requires
+    # lambda_max <= 0, i.e. the worst-case (largest) eigenvalue, not just the
+    # best case, so the shading is driven by lambda_max rather than lambda_min.
+    if v_min < 0:
         ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
-    
+
     ax.axhspan(0, y_top, color='red', alpha=0.15, zorder=0)
-    
+
     ax.set_ylim(y_bottom, y_top)
     ax.invert_xaxis()  # Invert x-axis to show decreasing samples
-    
+
     # Add text labels at left boundary
     x_left = max(n_samples)  # Left boundary after inversion
-    if m_min < 0:
+    if v_min < 0:
         # Place "concave" text in the middle of the negative region
         y_concave = 0 + (0 - y_top) * 0.5
-        ax.text(x_left, y_concave, 'concave', 
+        ax.text(x_left, y_concave, 'concave',
                 verticalalignment='center', horizontalalignment='left',
                 fontsize=9, color='darkgreen', weight='bold')
-    
+
     # Place "convex" text in the middle of the positive region
     y_convex = 0 + (y_top - 0) * 0.5
-    ax.text(x_left, y_convex, 'convex', 
+    ax.text(x_left, y_convex, 'convex',
             verticalalignment='center', horizontalalignment='left',
             fontsize=9, color='darkred', weight='bold')
-    
+
     for spine in ax.spines.values():
         spine.set_linewidth(1.25)
-    
+
     plt.title(title, fontsize=12)
     plt.tight_layout()
-    
+
     # Save the plot
     filename = title.replace(" ", "_").lower() + '.pdf'
     figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
     os.makedirs(figures_dir, exist_ok=True)
     filepath = os.path.join(figures_dir, filename)
-    
+
     fig.savefig(filepath, bbox_inches='tight', dpi=300)
     print(f"Curvature bounds plot saved to {filepath}")
-    plt.show()
+    plt.close()
+
+
+def plot_curvature_condition_comparison(
+    curvature_histories: dict,
+    title: str = "Curvature Condition Comparison",
+    y_limits: tuple = None,
+):
+    """Overlay lambda_min(H_R)/lambda_max(H_R) curves from multiple runs.
+
+    Intended for a Gamma noise-prior concentration `a` ablation (Section M /
+    Figure 25 of the paper): pass one curvature_history per `a` value (as
+    returned by sequentially_optimize_samples / evaluate(..., return_plot_
+    data=True)['curvature_history'], already computed via calculate_
+    restricted_curvature_bounds's R_k = T ∩ S^(k) submatrix -- see plot_
+    curvature_bounds), and this plots all of their lambda_min/lambda_max
+    traces together so the effect of `a` on the RSC/RSM curvature condition
+    (Assumption 1 / Lemma 5) is directly visible: larger `a` should make both
+    curves settle further below zero (more concave / more stable).
+
+    Args:
+        curvature_histories: Dict mapping label (e.g. "a=2") -> curvature_history
+            dict with keys 'n_samples', 'lambda_min', 'lambda_max'.
+        title: Plot title / output filename stem.
+        y_limits: Optional fixed y-axis limits as (ymin, ymax).
+    """
+    if not curvature_histories:
+        print("No curvature histories provided")
+        return
+
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": False})
+    plt.rcParams.update({"legend.frameon": False})
+
+    # A full (not paper-column-fraction) base size, plus extra height for a
+    # below-axes legend that can hold up to 2 entries (lambda_min/lambda_max)
+    # per curve: rel_width=1/3 (this plot's original sizing) is only wide
+    # enough for the title/tick labels at this theme's font sizes, and with
+    # no layout engine reserving room for an external legend, that overlaps
+    # the axes/title instead of being placed outside them.
+    n_runs = max(len(curvature_histories), 1)
+    legend_rows = -(-2 * n_runs // 4)  # ceil(2*n_runs / 4 columns)
+    base_figsize = figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.62)['figure.figsize']
+    fig, ax = plt.subplots(figsize=(base_figsize[0], base_figsize[1] + 0.22 * legend_rows))
+
+    palette = [
+        "#5F4690", "#1D6996", "#38A6A5", "#0F8554", "#73AF48",
+        "#EDAD08", "#CC503E", "#94346E", "#6F4070", "#994E95", "#666666",
+    ]
+
+    global_y_min = None
+    global_y_max = None
+
+    for idx, (label, ch) in enumerate(curvature_histories.items()):
+        if not ch or not ch.get('lambda_max'):
+            continue
+        n_samples = np.array(ch['n_samples'])
+        lam_min = np.array(ch['lambda_min'])
+        lam_max = np.array(ch['lambda_max'])
+        if len(n_samples) == 0:
+            continue
+
+        color = palette[idx % len(palette)]
+        # lambda_min: solid line; lambda_max: dashed line; shaded band between
+        ax.plot(n_samples, lam_min, marker='o', markersize=3, linewidth=1.5,
+                alpha=0.9, color=color, linestyle='-',
+                label=rf'$\lambda_{{\min}}$ {label}')
+        ax.plot(n_samples, lam_max, marker='s', markersize=3, linewidth=1.5,
+                alpha=0.6, color=color, linestyle='--',
+                label=rf'$\lambda_{{\max}}$ {label}')
+        ax.fill_between(n_samples, lam_min, lam_max, color=color, alpha=0.07)
+
+        with np.errstate(all='ignore'):
+            loc_min = np.nanmin(lam_min)
+            loc_max = np.nanmax(lam_max)
+        if not np.isnan(loc_min):
+            global_y_min = loc_min if global_y_min is None else min(global_y_min, loc_min)
+        if not np.isnan(loc_max):
+            global_y_max = loc_max if global_y_max is None else max(global_y_max, loc_max)
+
+    ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
+    ax.set_xlabel(r'Number of Samples $|\mathcal{S}^{(k)}|$')
+    ax.set_ylabel(r'Restricted Curvature')
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+    ax.invert_xaxis()
+
+    y_bottom = None
+    y_top = None
+    if y_limits is not None:
+        y_bottom, y_top = y_limits
+        ax.set_ylim(y_bottom, y_top)
+    elif global_y_min is not None and global_y_max is not None:
+        span = global_y_max - global_y_min
+        margin = max(abs(global_y_min), abs(global_y_max)) * 0.15 if span > 1e-10 else 1.0
+        margin = max(margin, 0.1)
+        y_bottom = global_y_min - margin
+        y_top = global_y_max + margin
+        ax.set_ylim(y_bottom, y_top)
+
+    if y_bottom is not None and y_top is not None:
+        if y_bottom < 0:
+            ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
+        ax.axhspan(0, y_top, color='red', alpha=0.15, zorder=0)
+
+        # Axes-fraction placement (ax.transAxes), not data coordinates: a
+        # data-coordinate anchor at the extreme edge of the plotted x-range
+        # (e.g. global min n_samples) sits flush with -- and, with usetex
+        # font metrics, can render past -- the axes' right border, clipping
+        # the label in the saved figure. Anchoring in the axes' own [0, 1]
+        # fraction space keeps 'convex'/'concave' just inside the panel
+        # regardless of each run's actual x/y data range. Kept near the
+        # right edge (top-/bottom-right corner) since lambda_min/lambda_max
+        # converge toward zero there, leaving the corner uncluttered.
+        ax.text(0.96, 0.94, 'convex', transform=ax.transAxes,
+                verticalalignment='top', horizontalalignment='right',
+                fontsize=7, color='darkred', weight='bold')
+        if y_bottom < 0:
+            ax.text(0.96, 0.06, 'concave', transform=ax.transAxes,
+                    verticalalignment='bottom', horizontalalignment='right',
+                    fontsize=7, color='darkgreen', weight='bold')
+
+    # Below-axes legend (not to the right): with up to 2*n_runs entries this
+    # avoids needing to widen the figure -- it just wraps into more rows,
+    # which the figsize above already reserved height for.
+    legend = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.22), ncol=4,
+                        fontsize=6, handlelength=1.2, handletextpad=0.4,
+                        columnspacing=1.0, borderpad=0.4)
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.25)
+
+    ax.set_title(title, fontsize=10)
+
+    filename = title.replace(" ", "_").lower() + '_condition.pdf'
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    fig.savefig(filepath, bbox_inches='tight', bbox_extra_artists=(legend,), dpi=300)
+    print(f"Curvature condition plot saved to {filepath}")
+    plt.close(fig)
+
+
+def plot_curvature_condition_grid(
+    panels,
+    filename_stem: str = "curvature_ablation_grid",
+    y_limits: tuple = None,
+):
+    """Side-by-side grid version of plot_curvature_condition_comparison: one
+    lambda_min/lambda_max-vs-|S^(k)| subplot per curvature ablation (e.g.
+    symmetric / asymmetric / twitter), sharing a single legend below the
+    figure instead of each panel repeating its own.
+
+    Built to combine the three Gamma noise-prior concentration `a` sweeps
+    (Section M / Figure 25 of the paper) run across the sin_symmetric,
+    sin_asymmetric and twitter curvature-ablation configs into one figure --
+    see run_curvature_ablations.py.
+
+    Args:
+        panels: List of (short_title, curvature_histories) pairs, left to
+            right. curvature_histories maps label (e.g. "a=2") -> dict with
+            'n_samples', 'lambda_min', 'lambda_max' (as returned by
+            evaluate(..., return_plot_data=True)['curvature_history']).
+        filename_stem: Output filename stem (saved as <stem>.pdf under the
+            figures dir).
+        y_limits: Optional (ymin, ymax) applied to every subplot. None (the
+            default) auto-scales each subplot to its own data -- the three
+            ablations differ by roughly an order of magnitude in curvature
+            and sample count, so a shared y-axis would flatten the smaller
+            two into unreadable slivers.
+    """
+    panels = [(panel_title, ch) for panel_title, ch in panels if ch]
+    if not panels:
+        print("No curvature histories provided")
+        return
+
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": True})
+    plt.rcParams.update({"legend.frameon": False})
+
+    n_panels = len(panels)
+
+    # Stable color per gamma_prior_a label, shared across panels so e.g.
+    # "a=5" is the same color in every subplot -- required for the panels'
+    # legend entries to collapse into one shared legend.
+    all_labels = []
+    for _, curvature_histories in panels:
+        for label in curvature_histories:
+            if label not in all_labels:
+                all_labels.append(label)
+
+    palette = [
+        "#5F4690", "#1D6996", "#38A6A5", "#0F8554", "#73AF48",
+        "#EDAD08", "#CC503E", "#94346E", "#6F4070", "#994E95", "#666666",
+    ]
+    label_color = {label: palette[i % len(palette)] for i, label in enumerate(all_labels)}
+
+    # Reserve room below the axes for the shared legend, same sizing logic
+    # as the single-panel version (2 entries -- lambda_min/lambda_max --
+    # per gamma_prior_a value, wrapped at LEGEND_NCOL columns).
+    LEGEND_NCOL = 6
+    n_runs = max(len(all_labels), 1)
+    legend_rows = -(-2 * n_runs // LEGEND_NCOL)  # ceil(2*n_runs / LEGEND_NCOL columns)
+    base_figsize = figsizes.iclr2023(nrows=1, ncols=n_panels, height_to_width_ratio=0.62)['figure.figsize']
+    fig, axes = plt.subplots(
+        1, n_panels,
+        figsize=(base_figsize[0], base_figsize[1] + 0.22 * legend_rows),
+        sharey=False,
+    )
+    axes = np.atleast_1d(axes)
+
+    legend_handles = {}
+
+    for ax, (panel_title, curvature_histories) in zip(axes, panels):
+        global_y_min = None
+        global_y_max = None
+
+        for label, ch in curvature_histories.items():
+            if not ch or not ch.get('lambda_max'):
+                continue
+            n_samples = np.array(ch['n_samples'])
+            lam_min = np.array(ch['lambda_min'])
+            lam_max = np.array(ch['lambda_max'])
+            if len(n_samples) == 0:
+                continue
+
+            color = label_color[label]
+            label_min = rf'$\lambda_{{\min}}$ {label}'
+            label_max = rf'$\lambda_{{\max}}$ {label}'
+            line_min, = ax.plot(n_samples, lam_min, marker='o', markersize=3, linewidth=1.5,
+                                 alpha=0.9, color=color, linestyle='-', label=label_min)
+            line_max, = ax.plot(n_samples, lam_max, marker='s', markersize=3, linewidth=1.5,
+                                 alpha=0.6, color=color, linestyle='--', label=label_max)
+            ax.fill_between(n_samples, lam_min, lam_max, color=color, alpha=0.07)
+
+            legend_handles.setdefault(label_min, line_min)
+            legend_handles.setdefault(label_max, line_max)
+
+            with np.errstate(all='ignore'):
+                loc_min = np.nanmin(lam_min)
+                loc_max = np.nanmax(lam_max)
+            if not np.isnan(loc_min):
+                global_y_min = loc_min if global_y_min is None else min(global_y_min, loc_min)
+            if not np.isnan(loc_max):
+                global_y_max = loc_max if global_y_max is None else max(global_y_max, loc_max)
+
+        ax.axhline(y=0, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
+        ax.set_xlabel(r'Number of Samples $|\mathcal{S}^{(k)}|$')
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        ax.invert_xaxis()
+
+        y_bottom = None
+        y_top = None
+        if y_limits is not None:
+            y_bottom, y_top = y_limits
+            ax.set_ylim(y_bottom, y_top)
+        elif global_y_min is not None and global_y_max is not None:
+            span = global_y_max - global_y_min
+            margin = max(abs(global_y_min), abs(global_y_max)) * 0.15 if span > 1e-10 else 1.0
+            margin = max(margin, 0.1)
+            y_bottom = global_y_min - margin
+            y_top = global_y_max + margin
+
+            # Guarantee the 'convex' label a clear top strip regardless of
+            # how the data happens to be shaped: when the positive part of
+            # the range is a tiny sliver hugging zero (e.g. twitter,
+            # asymmetric -- curves converge to near-zero at the right edge,
+            # where the label also sits), the margin above only pads
+            # global_y_max a little, so the zero-line ends up high in the
+            # axes and the label collides with the converging curves. Widen
+            # y_top (never shrink it) so the zero-line sits at or below
+            # TOP_LABEL_CLEARANCE of the axes height, reserving real
+            # headroom above it for the label. A no-op when the margin
+            # above already clears that bar (e.g. symmetric).
+            TOP_LABEL_CLEARANCE = 0.75
+            below_zero = -y_bottom
+            min_y_top_for_label = below_zero * (1 - TOP_LABEL_CLEARANCE) / TOP_LABEL_CLEARANCE
+            y_top = max(y_top, min_y_top_for_label)
+            ax.set_ylim(y_bottom, y_top)
+
+        if y_bottom is not None and y_top is not None:
+            if y_bottom < 0:
+                ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
+            ax.axhspan(0, y_top, color='red', alpha=0.15, zorder=0)
+
+            # Axes-fraction placement (ax.transAxes): each panel has its own
+            # x/y data range (the three ablations differ by roughly an order
+            # of magnitude), so anchoring in data coordinates at the extreme
+            # edge of that range -- as the single-panel version originally
+            # did -- sits flush with the axes border and can render past it.
+            # Fraction coordinates keep 'convex'/'concave' just inside every
+            # panel regardless of its own range. Kept near the right edge
+            # (top-/bottom-right corner), where lambda_min/lambda_max
+            # converge toward zero and the corner stays uncluttered. Shifted
+            # up (0.97, was 0.94) now that the TOP_LABEL_CLEARANCE headroom
+            # above is guaranteed, so it can't run back into the curves.
+            ax.text(0.96, 0.97, 'convex', transform=ax.transAxes,
+                    verticalalignment='top', horizontalalignment='right',
+                    fontsize=7, color='darkred', weight='bold')
+            if y_bottom < 0:
+                ax.text(0.96, 0.06, 'concave', transform=ax.transAxes,
+                        verticalalignment='bottom', horizontalalignment='right',
+                        fontsize=7, color='darkgreen', weight='bold')
+
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.25)
+
+        ax.set_title(panel_title, fontsize=10)
+
+    axes[0].set_ylabel(r'Restricted Curvature')
+
+    # One shared legend below all subplots instead of each panel repeating
+    # its own -- entries are deduplicated by label, so identical
+    # gamma_prior_a values across panels collapse to a single entry.
+    legend_labels = list(legend_handles.keys())
+    ncol = min(LEGEND_NCOL, len(legend_labels)) if legend_labels else 1
+    legend = fig.legend([legend_handles[l] for l in legend_labels], legend_labels,
+                         loc='upper center', bbox_to_anchor=(0.5, 0.02), ncol=ncol,
+                         fontsize=6, handlelength=1.2, handletextpad=0.4,
+                         columnspacing=1.0, borderpad=0.4)
+
+    filename = filename_stem.replace(" ", "_").lower() + '.pdf'
+    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(figures_dir, exist_ok=True)
+    filepath = os.path.join(figures_dir, filename)
+    fig.savefig(filepath, bbox_inches='tight', bbox_extra_artists=(legend,), dpi=300)
+    print(f"Curvature condition grid plot saved to {filepath}")
+    plt.close(fig)
 
 

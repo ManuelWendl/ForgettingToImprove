@@ -1,0 +1,21 @@
+defaults:
+  - algorithm: mbpo
+  - dynamics_model: ensemble_model
+  - overrides: mbpo_cartpole
+  - _self_
+
+seed: ${overrides.seed}
+device: "cuda:0"
+evaluation_interval: 1
+save_video: false
+debug_mode: false
+
+experiment: default
+
+root_dir: "./exp"
+hydra:
+  run:
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
+
+  sweep:
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}

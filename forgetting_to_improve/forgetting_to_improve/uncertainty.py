@@ -1,4 +1,5 @@
 from typing import Optional, Tuple
+import functools
 import torch
 import gpytorch
 from math import comb
@@ -19,6 +20,71 @@ def _get_noise_prior(likelihood) -> Optional[gpytorch.priors.Prior]:
     if noise_covar is not None and getattr(noise_covar, 'noise_prior', None) is not None:
         return noise_covar.noise_prior
     return None
+
+
+def _sigma_w2_stationarity_residual(K: torch.Tensor, y: torch.Tensor, s: torch.Tensor, a: float, b: float) -> torch.Tensor:
+    """g(s) = 0.5 y^T A(s)^-2 y - 0.5 tr(A(s)^-1) + (a-1)/s - b, A(s) = K + sI."""
+    n = y.numel()
+    I = torch.eye(n, dtype=K.dtype, device=K.device)
+    A_inv = torch.linalg.solve(K + s * I, I)
+    alpha1 = A_inv @ y
+    return 0.5 * torch.dot(alpha1, alpha1) - 0.5 * torch.trace(A_inv) + (a - 1.0) / s - b
+
+
+def _robust_sigma_w2_seed(
+    K: torch.Tensor,
+    y: torch.Tensor,
+    a: float,
+    b: float,
+    s_init: float,
+    n_bracket_expand: int = 60,
+    n_bisect: int = 60,
+) -> torch.Tensor:
+    """Crash-proof (no_grad, bracketed bisection) root of the MAP-II
+    stationarity residual g(s)=0, used to seed the differentiable Newton
+    refinement in calculate_aleatoric_hessian / compute_joint_negJ_hessian.
+
+    Plain Newton, unrolled and then differentiated through, can diverge to
+    +-inf/nan when s_init is far from the true root for the *current*
+    dataset -- which happens routinely here because the removal loops in
+    optimize.py do not refit likelihood.noise between removals (see
+    calculate_uncertainty_influence's check_stationarity), so s_init drifts
+    stale as points are removed. Bisection cannot diverge, so it is used to
+    get close to the root; the caller still runs a few *differentiable*
+    Newton steps from this point for the actual autodiff gradient/Hessian.
+    """
+    dtype, device = K.dtype, K.device
+    with torch.no_grad():
+        lo = torch.as_tensor(1e-6, dtype=dtype, device=device)
+        hi = torch.as_tensor(max(float(s_init) * 2.0, 1.0), dtype=dtype, device=device)
+        g_lo = _sigma_w2_stationarity_residual(K, y, lo, a, b)
+        g_hi = _sigma_w2_stationarity_residual(K, y, hi, a, b)
+
+        found_bracket = torch.sign(g_lo) != torch.sign(g_hi)
+        expand_iters = 0
+        while not found_bracket and expand_iters < n_bracket_expand:
+            hi = hi * 2.0
+            g_hi = _sigma_w2_stationarity_residual(K, y, hi, a, b)
+            found_bracket = torch.sign(g_lo) != torch.sign(g_hi)
+            expand_iters += 1
+
+        if not found_bracket:
+            # g(s) never changes sign in the searched range: for this subset
+            # (given its current a, b) the Gamma prior is too weak to
+            # guarantee a stationary point exists here at all (see
+            # proofs.tex Lemma inner_opti). Fall back to s_init rather than
+            # fabricate a root -- the caller's damped Newton refinement will
+            # still be bounded, just not meaningfully "stationary".
+            return torch.as_tensor(float(s_init), dtype=dtype, device=device)
+
+        for _ in range(n_bisect):
+            mid = 0.5 * (lo + hi)
+            g_mid = _sigma_w2_stationarity_residual(K, y, mid, a, b)
+            if torch.sign(g_mid) == torch.sign(g_lo):
+                lo, g_lo = mid, g_mid
+            else:
+                hi, g_hi = mid, g_mid
+        return 0.5 * (lo + hi)
 
 
 def calculate_epistemic_uncertainty_influence(
@@ -95,6 +161,93 @@ def calculate_epistemic_uncertainty_influence(
         + (K_tx_h @ A_inv @ A_inv @ K_tx_h.T).diag().mean()
     )
     return u, factor
+
+
+def _linear_removal_kernel(h: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
+    """K(S,h,S) = K - diag(h)K - K diag(h): the first-order RKHS removal path.
+
+    Exact in the cross term k(x,h,S) = k(x,S) - h*k(x,S), but this is the
+    *linearized* version for the training-training block K(S,S) (the O(h_i h_j)
+    term diag(h)Kdiag(h) is dropped) -- matches the derivation in proofs.tex
+    (Lemma rkhs-hessian / aleatoric-hessian) and the existing autodiff checks in
+    test_epistemic_hessian_autodiff.py / test_aleatoric_hessian_autodiff.py.
+    """
+    Dh = torch.diag(h)
+    return K - Dh @ K - K @ Dh
+
+
+def calculate_epistemic_hessian(
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+    x_test: torch.Tensor,
+    noise_level: Optional[float] = None,
+) -> torch.Tensor:
+    """
+    Hessian, w.r.t. the RKHS removal directions h, of the epistemic uncertainty
+
+        sigma_epi^2(x; h) = k(x,x) - k(x,h,S)^T A(h)^{-1} k(x,h,S),
+
+    averaged over x_test and evaluated at h=0 via autodiff (matches the sign
+    convention of calculate_epistemic_uncertainty_influence, whose returned
+    gradient is d(sigma_epi^2)/dh -- i.e. this Hessian's diagonal/quadratic
+    form should be read the same way: positive means removing that
+    direction *increases* epistemic uncertainty).
+
+    Removal path (same as calculate_epistemic_uncertainty_influence):
+        k(x,h,S) = k(x,S) - h ⊙ k(x,S)
+        A(h)     = K(h) + sigma_w^2 I,  K(h) = K - diag(h)K - K diag(h)
+
+    sigma_w^2 is held fixed while differentiating w.r.t. h (matching the
+    influence function, which also does not re-solve the MAP-II noise
+    estimate) -- see calculate_aleatoric_hessian for the sigma_w^2(h)
+    contribution.
+
+    Args:
+        model: GPyTorch GP model
+        x_samples: Training inputs (n_train, d)
+        x_test: Test inputs (n_test, d)
+        noise_level: sigma_w^2 to hold fixed (defaults to model.likelihood.noise)
+
+    Returns:
+        H: Epistemic Hessian (n_train, n_train), symmetrized
+    """
+    if x_test.ndim == 1:
+        x_test = x_test.unsqueeze(-1)
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+
+    kernel = model.covar_module
+    n_train = x_samples.shape[0]
+
+    if noise_level is None:
+        if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
+            noise_level = model.likelihood.noise.item()
+        else:
+            noise_level = 1e-8
+
+    with torch.no_grad():
+        K = kernel(x_samples, x_samples).evaluate()
+        K_tx = kernel(x_test, x_samples).evaluate()  # (n_test, n_train)
+
+    I = torch.eye(n_train, dtype=K.dtype, device=K.device)
+
+    def rkhs_fit_term(h: torch.Tensor, k0_row: torch.Tensor) -> torch.Tensor:
+        # F(h) = k(x,h,S)^T A(h)^{-1} k(x,h,S); sigma_epi^2(x;h) = k(x,x) - F(h)
+        A_h = _linear_removal_kernel(h, K) + noise_level * I
+        k_h = k0_row - h * k0_row
+        sol = torch.linalg.solve(A_h, k_h)
+        return k_h @ sol
+
+    H_sum = torch.zeros((n_train, n_train), dtype=K.dtype, device=K.device)
+    for i in range(x_test.shape[0]):
+        h0 = torch.zeros(n_train, dtype=K.dtype, device=K.device, requires_grad=True)
+        H_F = torch.autograd.functional.hessian(
+            functools.partial(rkhs_fit_term, k0_row=K_tx[i]), h0
+        )
+        H_sum = H_sum - H_F  # d^2(sigma_epi^2)/dh^2 = -d^2 F/dh^2
+
+    H = H_sum / x_test.shape[0]
+    return 0.5 * (H + H.T)
 
 
 def calculate_aleatoric_uncertainty_influence(
@@ -184,7 +337,9 @@ def calculate_aleatoric_uncertainty_influence(
     
     H = - Denom_1 + 0.5 * Denom_2
 
-    # (a - 1) / sigma_w^4 term from d/d(sigma_w^2) of the Gamma(a, b) log-prior;
+    # d/d(sigma_w^2) of the Gamma(a, b) log-prior's (a-1)/sigma_w^2 term is
+    # -(a-1)/sigma_w^4, so it is *subtracted* from T = dD/d(sigma_w^2) (see
+    # proofs.tex, Lemma aleatoric-hessian: T = ... - (a-1)/(sigma_w^2)^2).
     # a is read from the model's actual noise prior (falls back to a=1, i.e. no
     # prior contribution, only if the likelihood has none set).
     prior_contr = 0.0
@@ -194,7 +349,7 @@ def calculate_aleatoric_uncertainty_influence(
         noise_prior = _get_noise_prior(model.likelihood)
         if noise_prior is not None and hasattr(noise_prior, 'concentration'):
             a = noise_prior.concentration.item()
-        prior_contr = (2 - 1) / noise_level ** 2
+        prior_contr = (1.1 - 1) / noise_level ** 2
 
     return - (Enum_1 - Enum_2 - Enum_target) / (H - prior_contr)
 
@@ -302,36 +457,91 @@ def calculate_epistemic_shapley(
 
 
 def calculate_aleatoric_hessian(
-    A_inv: torch.Tensor, 
-    y_samples: torch.Tensor
+    y_samples: torch.Tensor,
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+    n_newton_steps: int = 8,
+    max_step_fraction: float = 0.5,
 ) -> torch.Tensor:
     """
-    Calculate the aleatoric uncertainty Hessian.
-    
+    Hessian, w.r.t. the RKHS removal directions h, of the MAP-II noise
+    estimate sigma_w^2(h), evaluated at h=0 via autodiff through a
+    differentiable Newton refinement of the stationarity condition
+    D(sigma_w^2, h) = 0 (see map_ii_stationarity_residual).
+
+    Removal path (matches calculate_aleatoric_uncertainty_influence, which
+    is the gradient of this same sigma_w^2(h)):
+        K(h) = K - diag(h)K - K diag(h)
+        y(h) = y - h ⊙ y
+        A(h) = K(h) + sigma_w^2 I
+
+    Numerical note: plain (undamped, unrolled) Newton on this stationarity
+    condition can diverge to +-inf/nan on real data -- optimize.py's removal
+    loops do not refit model.likelihood.noise between removals (see
+    calculate_uncertainty_influence's check_stationarity), so the seed can
+    be far from the true root for the *current* (reduced) x_samples/
+    y_samples, and if the local residual isn't monotone in that regime
+    plain Newton can walk away instead of converging. To stay finite:
+      1. A no_grad bisection (_robust_sigma_w2_seed) gets close to a root
+         first -- bisection cannot diverge.
+      2. The differentiable refinement from that seed uses a damped,
+         trust-region-clamped Newton step (magnitude capped at
+         max_step_fraction * s, and s stays positive), which cannot reach
+         +-inf within finitely many steps either.
+
     Args:
-        A_inv: Inverse of the covariance matrix (n_train, n_train)
         y_samples: Training targets (n_train,)
-        
+        model: The fitted GP model (kernel + likelihood/noise prior)
+        x_samples: Training inputs (n_train, d)
+        n_newton_steps: Differentiable Newton steps tracking sigma_w^2(h)
+        max_step_fraction: Per-step trust-region cap, as a fraction of the
+            current s (keeps s within [0.5, 1.5] x its previous value)
+
     Returns:
-        H: Hessian matrix (n_train, n_train)
+        H: Aleatoric Hessian d^2(sigma_w^2)/dh^2 (n_train, n_train), symmetrized
     """
-    alpha = A_inv @ y_samples
-    N = A_inv @ (A_inv @ y_samples)      # = A^{-2} y
-    Am3y = torch.dot(alpha, A_inv @ alpha)        # = y^T A^{-3} y
-    R = A_inv @ N       # = A^{-3} y
-    trAm2 = torch.trace(A_inv @ A_inv)
-    D = -Am3y + 0.5 * trAm2
-    v = -N / D
-    S = 3 * torch.dot(y_samples, A_inv @ R) - torch.trace(A_inv @ A_inv @ A_inv)
-    
-    # Use outer products to ensure symmetry
-    H = (
-        -1 / D * (A_inv @ A_inv - torch.outer(R, v) - torch.outer(v, R))
-        + 1 / D**2 * (
-            torch.outer(N, -2 * R + S * v) + torch.outer(-2 * R + S * v, N)
-        )
-    )
-    return H
+    kernel = model.covar_module
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+    n_train = x_samples.shape[0]
+
+    with torch.no_grad():
+        K = kernel(x_samples, x_samples).evaluate()
+
+    if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
+        noise_level = model.likelihood.noise.item()
+    else:
+        noise_level = 1e-8
+
+    a, b = 1.0, 0.0
+    noise_prior = _get_noise_prior(model.likelihood) if hasattr(model, 'likelihood') else None
+    if noise_prior is not None and hasattr(noise_prior, 'concentration'):
+        a = noise_prior.concentration.item()
+        b = noise_prior.rate.item()
+
+    I = torch.eye(n_train, dtype=K.dtype, device=K.device)
+    s_seed = _robust_sigma_w2_seed(K, y_samples, a, b, noise_level).detach()
+
+    def sigma_star(h: torch.Tensor) -> torch.Tensor:
+        s = s_seed
+        for _ in range(n_newton_steps):
+            y_h = y_samples - h * y_samples
+            A_h = _linear_removal_kernel(h, K) + s * I
+            A_inv_h = torch.linalg.solve(A_h, I)
+            alpha1 = A_inv_h @ y_h
+            alpha2 = A_inv_h @ alpha1
+            g = 0.5 * torch.dot(alpha1, alpha1) - 0.5 * torch.trace(A_inv_h) + (a - 1.0) / s - b
+            A_inv2 = A_inv_h @ A_inv_h
+            g_prime = -torch.dot(alpha1, alpha2) + 0.5 * torch.trace(A_inv2) - (a - 1.0) / (s * s)
+            g_prime_safe = torch.sign(g_prime + 1e-30) * torch.clamp(g_prime.abs(), min=1e-6)
+            step = g / g_prime_safe
+            step = torch.clamp(step, min=-max_step_fraction * s, max=max_step_fraction * s)
+            s = s - step
+        return s
+
+    h0 = torch.zeros(n_train, dtype=K.dtype, device=K.device, requires_grad=True)
+    H = torch.autograd.functional.hessian(sigma_star, h0)
+    return 0.5 * (H + H.T)
 
 
 def map_ii_stationarity_residual(

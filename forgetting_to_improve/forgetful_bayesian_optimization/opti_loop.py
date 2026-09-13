@@ -34,13 +34,16 @@ def get_optimization_loop(
         method = opti_options.get('method', 'sequential')
         min_samples = opti_options.get('min_samples', 5)
         num_target_region_samples = opti_options.get('num_target_region_samples', 10000)
+        rolling_window = opti_options.get('rolling_window', None)
     else:
         algorithm = None
         method = None
+        rolling_window = None
 
     # Check if using baseline method
     is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp', 'modulating_surrogates']
-    
+    reset_per_task = opti_options.get('reset_per_task', False) if opti_options else False
+
     # Setup perturbation if configured
     apply_perturbation = False
     perturbation_type = None
@@ -58,6 +61,14 @@ def get_optimization_loop(
 
     def optimization_loop(num_iters, seed):
         """Runs the Bayesian optimization loop."""
+        # `seed` was previously only threaded into draw_sobol_samples (initial
+        # design / target-region grid). The jacobian kernel's MLP weight init
+        # (and every full-MLP retrain inside filter_samples' 'joint' loop) draws
+        # from torch's global RNG, which was never seeded -- so "seed i" was not
+        # actually reproducible, and re-running an identical config could flip
+        # which method won. Seeding here makes the whole loop deterministic.
+        torch.manual_seed(seed)
+
         # Normalize bounds to [0, 1] hypercube for consistent GP priors
         # Store original bounds for denormalization
         original_bounds = global_bounds
@@ -97,11 +108,21 @@ def get_optimization_loop(
         train_x = draw_sobol_samples(
             bounds=normalized_bounds, n=n_initial_samples, q=1, seed=seed
         ).squeeze(1)
+
+        # Set iteration for CSV benchmark (if applicable)
+        if hasattr(obj, 'set_iteration'):
+            obj.set_iteration(0)
+
         exact_obj = normalized_obj(train_x).unsqueeze(-1)  # add output dimension
 
         best_observed_value = exact_obj.max().item()
         best_observed = [best_observed_value]
         train_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
+
+        # Track current task for continual learning scenarios
+        current_task = getattr(obj, 'current_task', None)
+        running_best = best_observed_value  # Running best for current task
+        previous_model_state = None
 
         # Initial model - pass normalized bounds
         mll, model = initialize_model(train_x, train_obj, normalized_bounds)
@@ -113,6 +134,40 @@ def get_optimization_loop(
         iteration_times = []
         for i in range(1, num_iters + 1):
             iteration_start_time = time.time()
+
+            # Set iteration for CSV benchmark (if applicable)
+            if hasattr(obj, 'set_iteration'):
+                obj.set_iteration(i)
+                # Check if task changed - reset running best if so
+                new_task = getattr(obj, 'current_task', None)
+                if new_task is not None and new_task != current_task:
+                    current_task = new_task
+                    running_best = float('-inf')  # Reset for new task
+                    print(f"Task changed to {current_task}, resetting running best")
+
+                    if reset_per_task:
+                        # Keep current kernel/hyperparameter state for reload
+                        if model is not None and hasattr(model, 'state_dict'):
+                            try:
+                                previous_model_state = model.state_dict()
+                            except Exception:
+                                previous_model_state = None
+
+                        # Reset training set to fresh random samples for new task
+                        train_x = draw_sobol_samples(
+                            bounds=normalized_bounds,
+                            n=n_initial_samples,
+                            q=1,
+                            seed=seed + i,
+                        ).squeeze(1)
+
+                        exact_obj = normalized_obj(train_x).unsqueeze(-1)
+                        train_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
+                        running_best = exact_obj.max().item()
+
+                        # No previous task samples should be used going forward
+                        # Model will be re-initialized by the algorithm branch below
+
             # Handle baseline methods
             if algorithm == 'relevance_pursuit':
                 # Create fresh kernel for each iteration
@@ -185,11 +240,52 @@ def get_optimization_loop(
                 
                 # Reinitialize model with filtered samples
                 mll, model = initialize_model(filtered_x_samples, standardize(filtered_y_samples), normalized_bounds)
-            
+
+            # Target region sampling baseline: only refit the GP on the
+            # observed points that fall inside the current target region,
+            # rather than filtering by per-sample influence like 'joint'/'epistemic'.
+            elif algorithm == 'target_region':
+                target_region = TargetRegion(normalized_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
+                if target_region.samples.shape[0] > 2:
+                    target_region.update(model)
+                region_bounds = target_region.get_bounds()
+
+                in_region_mask = torch.zeros(train_x.shape[0], dtype=torch.bool)
+                for lo, hi in region_bounds:
+                    in_box = ((train_x >= lo) & (train_x <= hi)).all(dim=-1)
+                    in_region_mask = in_region_mask | in_box
+
+                if in_region_mask.sum().item() < min_samples:
+                    # Too few observed points fall inside the region to fit a
+                    # meaningful GP -- fall back to the min_samples points
+                    # closest to the region instead of an under-determined fit.
+                    region_centers = torch.stack([(lo + hi) / 2.0 for lo, hi in region_bounds])
+                    dists = torch.cdist(train_x, region_centers).min(dim=-1).values
+                    n_fallback = min(min_samples, train_x.shape[0])
+                    closest_indices = torch.topk(dists, n_fallback, largest=False).indices
+                    in_region_mask = torch.zeros(train_x.shape[0], dtype=torch.bool)
+                    in_region_mask[closest_indices] = True
+
+                filtered_x_samples = train_x[in_region_mask]
+                filtered_y_samples = train_obj[in_region_mask]
+
+                # Reinitialize model with target-region-filtered samples
+                mll, model = initialize_model(filtered_x_samples, standardize(filtered_y_samples), normalized_bounds)
+
             else:
                 # No special handling (algorithm == 'none')
                 mll, model = initialize_model(train_x, standardize(train_obj), normalized_bounds)
-            
+
+            # If we're resetting each task, load previous kernel/hyperparams
+            # to preserve learned structures across tasks while dropping samples.
+            if reset_per_task and previous_model_state is not None and model is not None:
+                if hasattr(model, 'load_state_dict'):
+                    try:
+                        model.load_state_dict(previous_model_state, strict=False)
+                    except Exception as e:
+                        print(f"Warning: could not load previous model state after reset: {e}")
+                previous_model_state = None
+
             # Fit model (skip for heteroscedastic as it's already fitted)
             if algorithm != 'heteroscedastic_gp':
                 try:
@@ -251,15 +347,20 @@ def get_optimization_loop(
             train_x = torch.cat([train_x, new_x])
             train_obj = torch.cat([train_obj, new_obj])
 
-            # update progress - evaluate at denormalized points
-            train_x_original = unnormalize(train_x, original_bounds)
-            best_value = obj(train_x_original).max().item()
-            best_observed.append(best_value)
-            
+            # Enforce rolling window constraint
+            if rolling_window is not None and train_x.shape[0] > rolling_window:
+                train_x = train_x[-rolling_window:]
+                train_obj = train_obj[-rolling_window:]
+
+            # Update progress - only evaluate NEW sample on current task
+            new_value = exact_obj.item()
+            running_best = max(running_best, new_value)
+            best_observed.append(running_best)
+
             iteration_time = time.time() - iteration_start_time
             iteration_times.append(iteration_time)
-            
-            print(f"Iteration {i}: Best observed value = {best_value}")
+
+            print(f"Iteration {i}: New value = {new_value:.6f}, Running best = {running_best:.6f}")
         
         return train_x, train_obj, best_observed, iteration_times
 

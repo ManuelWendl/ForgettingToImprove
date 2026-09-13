@@ -2,6 +2,8 @@ import torch
 import gpytorch
 from typing import Tuple
 
+from .uncertainty import _get_noise_prior, _robust_sigma_w2_seed
+
 
 def compute_aleatoric_hessian(
     A_inv: torch.Tensor,
@@ -238,6 +240,112 @@ def integrate_hessians_over_region(
     return (H_epi_integrated + H_ale_integrated)
 
 
+def compute_joint_negJ_hessian(
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+    y_samples: torch.Tensor,
+    x_test: torch.Tensor,
+    n_newton_steps: int = 8,
+    max_step_fraction: float = 0.5,
+) -> torch.Tensor:
+    """
+    Direct-autodiff Hessian, w.r.t. the RKHS removal directions h, of the
+    negated objective
+
+        -J(h) = mean_{x in x_test} F(x,h,sigma_w^2(h)) - sigma_w^2(h),
+        F(x,h,s) = k(x,h,S)^T (K(h)+sI)^{-1} k(x,h,S),
+
+    matching Lemma (rkhs-hessian) in proofs.tex, but extended with the
+    target removal path y(h) = y - h ⊙ y (not just the kernel path K(h) =
+    K - diag(h)K - K diag(h)) -- consistent with
+    uncertainty.calculate_aleatoric_uncertainty_influence /
+    calculate_aleatoric_hessian, which already include this term.
+
+    This replaces the hand-derived closed form previously assembled from
+    compute_epistemic_hessian / compute_aleatoric_hessian / compute_
+    aleatoric_hessian_at_x below: those functions do not reproduce their own
+    dedicated autodiff checks (see test_epistemic_hessian_autodiff.py /
+    test_aleatoric_hessian_autodiff.py at the repo root, which fail against
+    them) and do not account for y(h). sigma_w^2(h) is tracked via a
+    differentiable Newton refinement of the MAP-II stationarity condition
+    (see uncertainty.map_ii_stationarity_residual), initialised at the
+    model's current noise level -- which calculate_uncertainty_influence's
+    check_stationarity assumes is already (close to) the h=0 root, but which
+    optimize.py's removal loops never actually refit between removals. When
+    that assumption is stale for the current (reduced) subset, plain Newton
+    can diverge (observed as +-inf/nan on real data); see uncertainty.
+    calculate_aleatoric_hessian's docstring for the bisection-seeded, damped/
+    trust-region-clamped Newton refinement used here to stay finite instead.
+
+    Args:
+        model: GPyTorch GP model
+        x_samples: Training inputs (n_train, d)
+        y_samples: Training targets (n_train,)
+        x_test: Test inputs used to approximate the integral over the region
+        n_newton_steps: Differentiable Newton steps tracking sigma_w^2(h)
+        max_step_fraction: Per-step trust-region cap, as a fraction of the
+            current s (keeps s within [0.5, 1.5] x its previous value)
+
+    Returns:
+        H: Hessian of -J w.r.t. h, shape (n_train, n_train), symmetrized
+    """
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+    if x_test.ndim == 1:
+        x_test = x_test.unsqueeze(-1)
+
+    kernel = model.covar_module
+    n_train = x_samples.shape[0]
+    device = x_samples.device
+
+    if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
+        noise_level = model.likelihood.noise.item()
+    else:
+        noise_level = 1e-8
+
+    a, b = 1.0, 0.0
+    noise_prior = _get_noise_prior(model.likelihood) if hasattr(model, 'likelihood') else None
+    if noise_prior is not None and hasattr(noise_prior, 'concentration'):
+        a = noise_prior.concentration.item()
+        b = noise_prior.rate.item()
+
+    with torch.no_grad():
+        K = kernel(x_samples, x_samples).evaluate()
+        K_tx = kernel(x_test, x_samples).evaluate()  # (n_test, n_train)
+
+    I = torch.eye(n_train, dtype=K.dtype, device=device)
+    s_seed = _robust_sigma_w2_seed(K, y_samples, a, b, noise_level).detach()
+
+    def neg_J_mean(h: torch.Tensor) -> torch.Tensor:
+        y_h = y_samples - h * y_samples
+        Dh = torch.diag(h)
+        K_h = K - Dh @ K - K @ Dh
+
+        s = s_seed
+        for _ in range(n_newton_steps):
+            A_h = K_h + s * I
+            A_inv_h = torch.linalg.solve(A_h, I)
+            alpha1 = A_inv_h @ y_h
+            alpha2 = A_inv_h @ alpha1
+            g = 0.5 * torch.dot(alpha1, alpha1) - 0.5 * torch.trace(A_inv_h) + (a - 1.0) / s - b
+            A_inv2 = A_inv_h @ A_inv_h
+            g_prime = -torch.dot(alpha1, alpha2) + 0.5 * torch.trace(A_inv2) - (a - 1.0) / (s * s)
+            g_prime_safe = torch.sign(g_prime + 1e-30) * torch.clamp(g_prime.abs(), min=1e-6)
+            step = g / g_prime_safe
+            step = torch.clamp(step, min=-max_step_fraction * s, max=max_step_fraction * s)
+            s = s - step
+
+        A_h = K_h + s * I
+        k_h_all = K_tx - h.unsqueeze(0) * K_tx  # (n_test, n_train)
+        sol = torch.linalg.solve(A_h, k_h_all.T)  # (n_train, n_test)
+        F_mean = (k_h_all.T * sol).sum(dim=0).mean()
+        return F_mean - s
+
+    h0 = torch.zeros(n_train, dtype=K.dtype, device=device, requires_grad=True)
+    H = torch.autograd.functional.hessian(neg_J_mean, h0)
+    return 0.5 * (H + H.T)
+
+
 def calculate_curvature_bounds(
     model: gpytorch.models.GP,
     x_samples: torch.Tensor,
@@ -248,62 +356,32 @@ def calculate_curvature_bounds(
 ) -> float:
     """
     Calculate curvature bounds using sparse directional derivative.
-    
+
     Computes h^T H h where H is the Hessian ∇²J̄ and h is a sparse vector
-    with 1 at the position of the next sample to remove.
-    
+    with 1 at the position of the next sample to remove. H is computed
+    directly via autodiff by compute_joint_negJ_hessian (see its docstring
+    for why this replaced the previous hand-derived closed form).
+
     Args:
         model: GPyTorch GP model
         x_samples: Training inputs (n, d) - current remaining samples
         y_samples: Training targets (n,)
-        A_limits: Region limits for integration
-        n_integration_samples: Number of samples for numerical integration
+        x_test: Test points approximating the integration region
+        n_integration_samples: Unused (kept for backward-compatible signature)
         next_removal_index: Index of next sample to remove (0 to n-1)
                            If None, returns max eigenvalue (global analysis)
-        
+
     Returns:
         m: Curvature h^T H h (negative = concave, positive = convex)
            For single index: m = H[i,i] (diagonal element)
     """
     if x_samples.ndim == 1:
         x_samples = x_samples.unsqueeze(-1)
-    
+
     n_train = len(x_samples)
-    device = x_samples.device
-    kernel = model.covar_module
-    
-    # Get noise level
-    if hasattr(model, 'likelihood') and hasattr(model.likelihood, 'noise'):
-        noise_level = model.likelihood.noise.item()
-    else:
-        print("Warning: Model has no likelihood noise attribute; assuming noise level = 1e-8")
-        noise_level = 1e-8
-    
-    # Compute A = K(S, S) + σ²_w I
-    with torch.no_grad():
-        K = kernel(x_samples, x_samples).evaluate()
-    A = K + noise_level * torch.eye(n_train, device=device)
-    
-    # Compute A^{-1}
-    try:
-        A_inv = torch.inverse(A)
-    except Exception as e:
-        print(f"Warning: Matrix inversion failed: {e}. Adding jitter.")
-        A = A + 1e-4 * torch.eye(n_train, device=device)
-        A_inv = torch.inverse(A)
-    
-    # Integrate Hessians over region A
-    H = integrate_hessians_over_region(
-        A_inv=A_inv,
-        K=K,
-        kernel=kernel,
-        x_samples=x_samples,
-        y_samples=y_samples,
-        noise_level=noise_level,
-        x_test=x_test,
-        n_integration_samples=n_integration_samples
-    )
-    
+
+    H = compute_joint_negJ_hessian(model, x_samples, y_samples, x_test)
+
     # Compute sparse directional curvature h^T H h
     if next_removal_index is not None:
         # For sparse direction h = [0,...,0,1,0,...,0] at position i
@@ -326,6 +404,62 @@ def calculate_curvature_bounds(
             m = torch.trace(H).item() / n_train
     
     return m
+
+
+def calculate_restricted_curvature_bounds(
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+    y_samples: torch.Tensor,
+    x_test: torch.Tensor,
+    removal_indices,
+    current_index: int = None,
+) -> Tuple[float, float, float]:
+    """
+    Restricted curvature over the *submatrix* of all future removal
+    candidates, not just the diagonal entry of the point being removed
+    right now.
+
+    This matches the paper's Section M ("Experimental Validation of
+    Concavity") / Lemma 5: at removal step k, R_k = T ∩ S^(k) is the set of
+    indices (among the samples still present) that belong to the *full*
+    eventual removal set T -- i.e. everything that gets removed at this
+    step or any later step, not only the single sample chosen right now.
+    H_R(S^(k)) is the principal submatrix of H(S^(k)) = H^epi + H^ale
+    restricted to R_k, and lambda_min(H_R)/lambda_max(H_R) are exactly the
+    -M_R/-m_R spectral bounds of Lemma 5 (Figure 25 in the paper plots
+    these two curves directly).
+
+    Args:
+        model, x_samples, y_samples, x_test: as in calculate_curvature_bounds
+        removal_indices: current-row-position indices (into x_samples) of
+            every sample that is a member of T and still present in
+            x_samples -- i.e. R_k. Must include current_index.
+        current_index: index (into x_samples) of the point actually being
+            removed at this step; defaults to removal_indices[0].
+
+    Returns:
+        (m_diag, lambda_min, lambda_max): the single-point diagonal
+        curvature H[current_index, current_index] (matches the previous
+        next_removal_index-only behaviour of calculate_curvature_bounds),
+        and the min/max eigenvalues of the R_k-restricted submatrix.
+    """
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+
+    removal_indices = list(removal_indices)
+    if current_index is None:
+        current_index = int(removal_indices[0])
+
+    H = compute_joint_negJ_hessian(model, x_samples, y_samples, x_test)
+
+    m_diag = H[current_index, current_index].item()
+
+    idx = torch.as_tensor(removal_indices, dtype=torch.long, device=H.device)
+    H_R = H[idx][:, idx]
+    H_R = 0.5 * (H_R + H_R.T)
+    eig = torch.linalg.eigvalsh(H_R)
+
+    return m_diag, eig.min().item(), eig.max().item()
 
 
 def compute_curvature_ratio(m_epi: float, M_ale: float) -> float:

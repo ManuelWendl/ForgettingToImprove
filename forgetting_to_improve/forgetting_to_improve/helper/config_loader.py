@@ -90,7 +90,26 @@ class ConfigLoader:
         
         # Parse kernel configuration
         kernel_config = experiment.get('kernel', None)
-        
+
+        # Parse an optional Gamma noise-prior concentration sweep for the
+        # curvature analysis (Section M / Figure 25 of the paper):
+        # `gamma_prior_a` may be a single value or a list to sweep (e.g. [1,
+        # 2, 5, 10, 20, 50, 100, 200]). `gamma_prior_b` is not the rate -- to
+        # keep the sweep isolated to concentration, evaluate() reads it as
+        # the target noise-prior MEAN to hold fixed across every `a` in the
+        # sweep, deriving the actual rate per-a as b = a / gamma_prior_b (see
+        # evaluate.py). Left unset (None), evaluate() falls back to its
+        # self-calibrating default prior -- existing configs that don't
+        # mention this are unaffected.
+        gamma_prior_a_raw = experiment.get('gamma_prior_a', None)
+        gamma_prior_b_raw = experiment.get('gamma_prior_b', None)
+        gamma_prior_a_values = (
+            gamma_prior_a_raw if isinstance(gamma_prior_a_raw, list) else [gamma_prior_a_raw]
+        )
+        gamma_prior_b_values = (
+            gamma_prior_b_raw if isinstance(gamma_prior_b_raw, list) else [gamma_prior_b_raw]
+        )
+
         # Parse other parameters with defaults
         parsed_config = {
             'type': exp_type,
@@ -113,7 +132,9 @@ class ConfigLoader:
             'feature_subset': experiment.get('feature_subset', None),
             'kernel_config': kernel_config,
             'gp_alpha': experiment.get('gp_alpha', 0.01),
-            'per_kernel_removal_strategy': experiment.get('per_kernel_removal_strategy', 'one_per_kernel')
+            'per_kernel_removal_strategy': experiment.get('per_kernel_removal_strategy', 'one_per_kernel'),
+            'gamma_prior_a_values': gamma_prior_a_values,
+            'gamma_prior_b_values': gamma_prior_b_values,
         }
         
         return parsed_config

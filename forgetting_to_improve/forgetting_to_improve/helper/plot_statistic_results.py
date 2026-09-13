@@ -261,8 +261,8 @@ def plot_radar_comparison(results_folder, output_folder=None):
     benchmarks = {}
     for filepath in txt_files:
         # Extract benchmark name from filename
-        basename = os.path.basename(filepath)
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421.txt"
+        basename = os.path.splitext(os.path.basename(filepath))[0]
+        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
         benchmark_name = basename.split('_fitting_comparison')[0]
         
         results = parse_results_file(filepath)
@@ -479,8 +479,8 @@ def plot_line_profile_comparison(results_folder, output_folder=None):
     benchmarks = {}
     for filepath in txt_files:
         # Extract benchmark name from filename
-        basename = os.path.basename(filepath)
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421.txt"
+        basename = os.path.splitext(os.path.basename(filepath))[0]
+        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
         benchmark_name = basename.split('_fitting_comparison')[0]
         
         results = parse_results_file(filepath)
@@ -709,8 +709,8 @@ def plot_bar_comparison(results_folder, output_folder=None):
     benchmarks = {}
     for filepath in txt_files:
         # Extract benchmark name from filename
-        basename = os.path.basename(filepath)
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421.txt"
+        basename = os.path.splitext(os.path.basename(filepath))[0]
+        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
         benchmark_name = basename.split('_fitting_comparison')[0]
         
         results = parse_results_file(filepath)

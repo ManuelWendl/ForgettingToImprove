@@ -12,7 +12,7 @@ experiment:
   # The crash happened at approximately index 220 out of 405 points (around normalized time ~0)
   # We focus on a window around the crash: roughly -1.5 to 1.5 in normalized time
   # This corresponds to about +/- 60 minutes around the crash in real time
-  A_limits: [0.75, 1.25]
+  A_limits: [0.75, 1]
   
   # X_limits: Full trading day range (covers ~99.7% of normalized time data)
   # The full normalized time range is approximately [-3, 3] (representing 9:30 AM to 4:00 PM)
@@ -31,4 +31,4 @@ experiment:
       nu: 2.5
       length_scale: 0.1
     - type: white
-      noise_level: 1
+      noise_level: 0.2

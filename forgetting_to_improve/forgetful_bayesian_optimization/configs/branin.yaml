@@ -11,12 +11,12 @@ bayes_opt:
   plot_results: true
   results_path: botorch_branin_statistical.txt
   sample_optimization:
-    # algorithm: [none, joint, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
-    algorithm: [none, joint] #, warped_gp, relevance_pursuit]
+    # algorithm: [none, joint, target_region, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
+    algorithm: [target_region] #, warped_gp, relevance_pursuit]
     method: sequential 
     min_samples: 5
   kernel:
     - type: matern
       nu: 2.5
       length_scale: 0.1             
-  alpha: 1
+  alpha: 0.1

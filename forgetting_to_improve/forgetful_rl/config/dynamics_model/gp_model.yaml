@@ -1,0 +1,12 @@
+# @package _global_.dynamics_model
+_target_: forgetting_to_improve.forgetful_rl.model.gp_model.GPModel
+device: ${device}
+in_size: ???
+out_size: ???
+deterministic: false
+target_is_delta: true # false
+normalize: true # false
+max_train_size: 2500  
+kernel_type: 'matern'  # 'linear'
+noise_prior_shape: 500
+noise_prior_rate: 50

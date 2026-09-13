@@ -1,0 +1,239 @@
+import pathlib
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Type, Union
+
+import gymnasium as gym
+import numpy as np
+import omegaconf
+
+from ..data.buffer import ReplayBuffer
+
+def create_replay_buffer(
+    cfg: omegaconf.DictConfig,
+    obs_shape: Sequence[int],
+    act_shape: Sequence[int],
+    obs_type: Type = np.float32,
+    action_type: Type = np.float32,
+    reward_type: Type = np.float32,
+    load_dir: Optional[Union[str, pathlib.Path]] = None,
+    collect_trajectories: bool = False,
+    rng: Optional[np.random.Generator] = None,
+) -> ReplayBuffer:
+    """Creates a replay buffer from a given configuration.
+
+    The configuration should be structured as follows::
+
+        -cfg
+          -algorithm
+            -dataset_size (int, optional): the maximum size of the train dataset/buffer
+          -overrides
+            -num_steps (int, optional): how many steps to take in the environment
+            -trial_length (int, optional): the maximum length for trials. Only needed if
+                ``collect_trajectories == True``.
+
+    The size of the replay buffer can be determined by either providing
+    ``cfg.algorithm.dataset_size``, or providing ``cfg.overrides.num_steps``.
+    Specifying dataset set size directly takes precedence over number of steps.
+
+    Args:
+        cfg (omegaconf.DictConfig): the configuration to use.
+        obs_shape (Sequence of ints): the shape of observation arrays.
+        act_shape (Sequence of ints): the shape of action arrays.
+        obs_type (type): the data type of the observations (defaults to np.float32).
+        action_type (type): the data type of the actions (defaults to np.float32).
+        reward_type (type): the data type of the rewards (defaults to np.float32).
+        load_dir (optional str or pathlib.Path): if provided, the function will attempt to
+            populate the buffers from "load_dir/replay_buffer.npz".
+        collect_trajectories (bool, optional): if ``True`` sets the replay buffers to collect
+            trajectory information. Defaults to ``False``.
+        rng (np.random.Generator, optional): a random number generator when sampling
+            batches. If None (default value), a new default generator will be used.
+
+    Returns:
+        (:class:`mbrl.replay_buffer.ReplayBuffer`): the replay buffer.
+    """
+    dataset_size = (
+        cfg.algorithm.get("dataset_size", None) if "algorithm" in cfg else None
+    )
+    if not dataset_size:
+        # Use max_model_buffer_size if configured (for rolling buffer), otherwise num_steps
+        dataset_size = cfg.overrides.get("max_model_buffer_size", cfg.overrides.num_steps)
+    maybe_max_trajectory_len = None
+    if collect_trajectories:
+        if cfg.overrides.trial_length is None:
+            raise ValueError(
+                "cfg.overrides.trial_length must be set when "
+                "collect_trajectories==True."
+            )
+        maybe_max_trajectory_len = cfg.overrides.trial_length
+
+    replay_buffer = ReplayBuffer(
+        dataset_size,
+        obs_shape,
+        act_shape,
+        obs_type=obs_type,
+        action_type=action_type,
+        reward_type=reward_type,
+        rng=rng,
+        max_trajectory_length=maybe_max_trajectory_len,
+    )
+
+    if load_dir:
+        load_dir = pathlib.Path(load_dir)
+        replay_buffer.load(str(load_dir))
+
+    return replay_buffer
+
+
+def step_env_and_add_to_buffer(
+    env: gym.Env,
+    obs: np.ndarray,
+    agent,
+    agent_kwargs: Dict,
+    replay_buffer: ReplayBuffer,
+    callback: Optional[Callable] = None,
+    agent_uses_low_dim_obs: bool = False,
+) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+    """Steps the environment with an agent's action and populates the replay buffer.
+
+    Args:
+        env (gym.Env): the environment to step.
+        obs (np.ndarray): the latest observation returned by the environment (used to obtain
+            an action from the agent).
+        agent (:class:`mbrl.planning.Agent`): the agent used to generate an action.
+        agent_kwargs (dict): any keyword arguments to pass to `agent.act()` method.
+        replay_buffer (:class:`mbrl.util.ReplayBuffer`): the replay buffer
+            containing stored data.
+        callback (callable, optional): a function that will be called using the generated
+            transition data `(obs, action. next_obs, reward, terminated, truncated)`.
+        agent_uses_low_dim_obs (bool): only valid if env is of type
+            :class:`mbrl.env.MujocoGymPixelWrapper`. If ``True``, instead of passing the obs
+            produced by env.reset/step to the agent, it will pass
+            obs = env.get_last_low_dim_obs(). This is useful for rolling out an agent
+            trained with low dimensional obs, but collect pixel obs in the replay buffer.
+
+    Returns:
+        (tuple): next observation, reward, terminated, truncated and meta-info, respectively,
+        as generated by `env.step(agent.act(obs))`.
+    """
+
+    if agent_uses_low_dim_obs and not hasattr(env, "get_last_low_dim_obs"):
+        raise RuntimeError(
+            "Option agent_uses_low_dim_obs is only compatible with "
+            "env of type mbrl.env.MujocoGymPixelWrapper."
+        )
+    if agent_uses_low_dim_obs:
+        agent_obs = getattr(env, "get_last_low_dim_obs")()
+    else:
+        agent_obs = obs
+    action = agent.act(agent_obs, **agent_kwargs)
+    next_obs, reward, terminated, truncated, info = env.step(action)
+    replay_buffer.add(obs, action, next_obs, reward, terminated, truncated)
+    if callback:
+        callback((obs, action, next_obs, reward, terminated, truncated))
+    return next_obs, reward, terminated, truncated, info
+
+
+def rollout_agent_trajectories(
+    env: gym.Env,
+    steps_or_trials_to_collect: int,
+    agent,
+    agent_kwargs: Dict,
+    trial_length: Optional[int] = None,
+    callback: Optional[Callable] = None,
+    replay_buffer: Optional[ReplayBuffer] = None,
+    collect_full_trajectories: bool = False,
+    agent_uses_low_dim_obs: bool = False,
+    seed: Optional[int] = None,
+) -> List[float]:
+    """Rollout agent trajectories in the given environment.
+
+    Rollouts trajectories in the environment using actions produced by the given agent.
+    Optionally, it stores the saved data into a replay buffer.
+
+    Args:
+        env (gym.Env): the environment to step.
+        steps_or_trials_to_collect (int): how many steps of the environment to collect. If
+            ``collect_trajectories=True``, it indicates the number of trials instead.
+        agent (:class:`mbrl.planning.Agent`): the agent used to generate an action.
+        agent_kwargs (dict): any keyword arguments to pass to `agent.act()` method.
+        trial_length (int, optional): a maximum length for trials (env will be reset regularly
+            after this many number of steps). Defaults to ``None``, in which case trials
+            will end when the environment returns ``terminated=True`` or ``truncated=True``.
+        callback (callable, optional): a function that will be called using the generated
+            transition data `(obs, action. next_obs, reward, terminated, truncated)`.
+        replay_buffer (:class:`mbrl.util.ReplayBuffer`, optional):
+            a replay buffer to store data to use for training.
+        collect_full_trajectories (bool): if ``True``, indicates that replay buffers should
+            collect full trajectories. This only affects the split between training and
+            validation buffers. If ``collect_trajectories=True``, the split is done over
+            trials (full trials in each dataset); otherwise, it's done across steps.
+        agent_uses_low_dim_obs (bool): only valid if env is of type
+            :class:`mbrl.env.MujocoGymPixelWrapper` and replay_buffer is not ``None``.
+            If ``True``, instead of passing the obs
+            produced by env.reset/step to the agent, it will pass
+            obs = env.get_last_low_dim_obs(). This is useful for rolling out an agent
+            trained with low dimensional obs, but collect pixel obs in the replay buffer.
+
+    Returns:
+        (list(float)): Total rewards obtained at each complete trial.
+    """
+    if (
+        replay_buffer is not None
+        and replay_buffer.stores_trajectories
+        and not collect_full_trajectories
+    ):
+        # Might be better as a warning but it's possible that users will miss it.
+        raise RuntimeError(
+            "Replay buffer is tracking trajectory information but "
+            "collect_trajectories is set to False, which will result in "
+            "corrupted trajectory data."
+        )
+
+    step = 0
+    trial = 0
+    total_rewards: List[float] = []
+    while True:
+        obs, info = env.reset(seed=seed)
+        terminated = False
+        truncated = False
+        total_reward = 0.0
+        while not terminated and not truncated:
+            if replay_buffer is not None:
+                next_obs, reward, terminated, truncated, _ = step_env_and_add_to_buffer(
+                    env,
+                    obs,
+                    agent,
+                    agent_kwargs,
+                    replay_buffer,
+                    callback=callback,
+                    agent_uses_low_dim_obs=agent_uses_low_dim_obs,
+                )
+            else:
+                if agent_uses_low_dim_obs:
+                    raise RuntimeError(
+                        "Option agent_uses_low_dim_obs is only valid if a "
+                        "replay buffer is given."
+                    )
+                action = agent.act(obs, **agent_kwargs)
+                next_obs, reward, terminated, truncated, info = env.step(action)
+                if callback:
+                    callback((obs, action, next_obs, reward, terminated, truncated))
+            obs = next_obs
+            total_reward += reward
+            step += 1
+            if not collect_full_trajectories and step == steps_or_trials_to_collect:
+                total_rewards.append(total_reward)
+                return total_rewards
+            if trial_length and step % trial_length == 0:
+                if (
+                    collect_full_trajectories
+                    and not terminated
+                    and replay_buffer is not None
+                ):
+                    replay_buffer.close_trajectory()
+                break
+        trial += 1
+        total_rewards.append(total_reward)
+        if collect_full_trajectories and trial == steps_or_trials_to_collect:
+            break
+    return total_rewards
