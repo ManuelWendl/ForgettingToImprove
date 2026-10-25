@@ -121,21 +121,31 @@ def filter_replay_buffer(
     original_train_inputs = None
     original_train_targets = None
     is_multitask = hasattr(model, 'num_tasks')
-    
+    # Shared-trunk jacobian (last-layer Laplace) model -- see model/jacobian_model.py.
+    # Additive: mutually exclusive with is_multitask, existing behaviour for
+    # is_multitask / plain single-task models below is untouched.
+    is_shared_jacobian = hasattr(model, 'gp_models') and hasattr(model, 'shared_mlp')
+
     if is_multitask and hasattr(model, 'train_inputs'):
         # Store the original training data
         original_train_inputs = model.train_inputs
         original_train_targets = model.train_targets
-    
+
     # Store sampled size
     sampled_size = len(x_samples)
-    
+
     # Process each output dimension separately (state-delta dims only -- reward is
     # excluded entirely, see docstring).
     # For MultitaskGP, we need to create single-task GPs for each dimension.
     filtered_indices_list = []
 
-    print(f"[Filter] Processing {y_samples.shape[1]} output dimensions{' (MultitaskGP)' if is_multitask else ''}")
+    if is_shared_jacobian:
+        _model_kind = ' (shared-trunk JacobianGPModel)'
+    elif is_multitask:
+        _model_kind = ' (MultitaskGP)'
+    else:
+        _model_kind = ''
+    print(f"[Filter] Processing {y_samples.shape[1]} output dimensions{_model_kind}")
 
     for dim in range(y_samples.shape[1]):
         y_dim = y_samples[:, dim]
@@ -163,7 +173,25 @@ def filter_replay_buffer(
             dim_model = SingleTaskGP(x_samples, y_dim, single_likelihood).to(device)
             dim_model.eval()
             single_likelihood.eval()
-            
+
+        elif is_shared_jacobian:
+            # Reuse this dimension's own GP (shared trunk + its own
+            # JacobianKernel/MLPMeanIndexed) directly, instead of rebuilding a
+            # fresh kernel like the MultitaskGP branch above does -- so the
+            # removal criterion scores against the exact same model that's
+            # actually predicting. Its JacobianKernel carries no
+            # `jac_finetune` (see build_shared_jacobian_kernels), so
+            # optimize.py's per-removal MLP finetune hook (used only by
+            # sequentially_optimize_samples, not batch_optimize_samples) is
+            # automatically a no-op here -- the shared trunk is only ever
+            # refit once, jointly across every dimension, after this loop
+            # (see "full fine-tuning" call below), never per-dimension
+            # mid-loop, which would desync one dimension's features from
+            # another's.
+            dim_model = model.gp_models[dim]
+            dim_model.set_train_data(x_samples, y_dim, strict=False)
+            dim_model.eval()
+
         else:
             # Use the existing model
             dim_model = model
@@ -210,7 +238,38 @@ def filter_replay_buffer(
 
     print(f"[Filter] Final: Kept {final_kept_mask.sum().item()}/{sampled_size} samples "
           f"(intersection across state-delta dims, reward excluded)")
-    
+
+    # Shared-trunk jacobian model: the "full fine-tuning" variant -- one
+    # single, joint trunk+head refit on the samples retained across ALL
+    # dimensions, run exactly once here (never per-dimension inside the loop
+    # above). See JacobianGPModel.finetune_shared_trunk for why deferring to
+    # this combined mask (rather than refitting per-dimension mid-loop, the
+    # way the single-output optimize._finetune_kernel_mlp hook works) is what
+    # keeps every output dimension's features consistent with one another.
+    if is_shared_jacobian and hasattr(model, 'finetune_shared_trunk'):
+        kept_idx = torch.where(final_kept_mask)[0]
+        if len(kept_idx) >= 2:
+            y_finetune = y_samples[kept_idx]
+            # y_samples is ALWAYS state-deltas only -- reward is deliberately
+            # excluded from the removal/scoring criterion above (see module
+            # docstring). But the shared trunk's own head predicts
+            # [state-deltas, reward] when the model has learn_reward=True
+            # (same convention as JacobianGPModel.train_model), so a joint
+            # refit against state-deltas alone would target-shape-mismatch
+            # against the trunk's actual output width -- reattach the
+            # matching reward column here (from the same retained rows) so
+            # every head the trunk has stays supervised, rather than going
+            # stale under the trunk features this refit is about to shift.
+            if getattr(model, 'learn_reward', False):
+                kept_idx_np = kept_idx.cpu().numpy()
+                reward_kept = torch.as_tensor(
+                    all_data.rewards[kept_idx_np], dtype=y_finetune.dtype, device=y_finetune.device
+                ).reshape(-1, 1)
+                y_finetune = torch.cat([y_finetune, reward_kept], dim=-1)
+            print(f"[Filter] Shared-trunk jacobian model: joint fine-tuning MLP on "
+                  f"{len(kept_idx)} retained samples")
+            model.finetune_shared_trunk(x_samples[kept_idx], y_finetune)
+
     # Restore original training data for MultitaskGP
     if is_multitask and original_train_inputs is not None:
         print("[Filter] Restoring MultitaskGP training data")

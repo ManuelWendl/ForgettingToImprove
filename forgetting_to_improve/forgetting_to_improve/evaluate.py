@@ -115,6 +115,8 @@ def evaluate(
     show_hessian: bool = False,
     compare_optimal: bool = False,
     calculate_convexity: bool = False,
+    removal_threshold: float = 0.0,
+    map_noise: bool = False,
     objective_type: str = 'function',
     feature_subset: Optional[Union[int, List[int]]] = None,
     kernel_config: Optional[List[dict]] = None,
@@ -141,6 +143,9 @@ def evaluate(
         show_plots: Whether to show plots
         show_hessian: Whether to show Hessian
         calculate_convexity: Whether to compute curvature bounds m_epi and M_ale
+        removal_threshold: Minimum removal gain -influence for sequential removal
+        map_noise: Evaluate the sequential removal criterion at the MAP-II noise
+            of the current subset (see sequentially_optimize_samples)
         objective_type: Type of objective ('function' or 'dataset')
         feature_subset: Subset of features to use
         kernel_config: Kernel configuration
@@ -579,7 +584,9 @@ def evaluate(
             show_hessian=show_hessian,
             compare_optimal=compare_optimal,
             calculate_convexity=calculate_convexity,
-            A_limits=A_limits
+            A_limits=A_limits,
+            removal_threshold=removal_threshold,
+            map_noise=map_noise
         )
         x_samples_opt = x_samples_opt_torch.cpu().numpy()
         y_samples_opt = y_samples_opt_torch.cpu().numpy()
@@ -730,7 +737,7 @@ def evaluate(
     if calculate_convexity and show_plots and curvature_history and curvature_history.get('m'):
         plot_curvature_bounds(
             curvature_history, 
-            title="Restricted Curvature - Asymmetric"
+            title=f"Restricted Curvature - {getattr(objective_func, '__name__', objective_func)}"
         )
     
     # Return plot data if requested (for comparison plots)

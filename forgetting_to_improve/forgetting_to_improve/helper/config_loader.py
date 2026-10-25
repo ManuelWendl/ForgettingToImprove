@@ -1,15 +1,17 @@
 import yaml
 from typing import Dict, Any, List, Union
-from ..objectives import sin_symmetric_lengthscale_increase, sin_asymmetric_lengthscale_increase, sin_periodic_lengthscale_increase
+from ..objectives import sin_symmetric_lengthscale_increase, sin_asymmetric_lengthscale_increase, sin_periodic_lengthscale_increase, sin_symmetric_periodic, sin_symmetric_periodic_mismatch
 
 class ConfigLoader:
     """Load and parse configuration files for GP experiments."""
-    
+
     def __init__(self):
         self.objective_functions = {
             'sin_symmetric_lengthscale_increase': sin_symmetric_lengthscale_increase,
             'sin_asymmetric_lengthscale_increase': sin_asymmetric_lengthscale_increase,
-            'sin_periodic_lengthscale_increase': sin_periodic_lengthscale_increase
+            'sin_periodic_lengthscale_increase': sin_periodic_lengthscale_increase,
+            'sin_symmetric_periodic': sin_symmetric_periodic,
+            'sin_symmetric_periodic_mismatch': sin_symmetric_periodic_mismatch
         }
         
         # Available datasets
@@ -72,7 +74,7 @@ class ConfigLoader:
         
         # Parse noise types
         noises = self._parse_list_or_single(experiment.get('noise', 'joint'))
-        valid_noises = ['joint', 'epistemic', 'aleatoric']
+        valid_noises = ['joint', 'epistemic', 'aleatoric', 'aleatoric_scaled']
         for noise in noises:
             if noise not in valid_noises:
                 raise ValueError(f"Invalid noise type: {noise}. Must be one of {valid_noises}")
@@ -129,6 +131,8 @@ class ConfigLoader:
             'show_hessian': experiment.get('show_hessian', False),
             'compare_optimal': experiment.get('compare_optimal', False),
             'calculate_convexity': experiment.get('calculate_convexity', False),
+            'removal_threshold': experiment.get('removal_threshold', 0.0),
+            'map_noise': experiment.get('map_noise', False),
             'feature_subset': experiment.get('feature_subset', None),
             'kernel_config': kernel_config,
             'gp_alpha': experiment.get('gp_alpha', 0.01),

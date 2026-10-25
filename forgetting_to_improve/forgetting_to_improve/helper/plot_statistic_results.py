@@ -862,3 +862,257 @@ if __name__ == '__main__':
     plot_radar_comparison(results_folder)
     plot_line_profile_comparison(results_folder)
     plot_bar_comparison(results_folder)
+
+
+def _latex_p(p):
+    """p-value as LaTeX math, e.g. 'p = 1.1 \\cdot 10^{-5}'."""
+    if not np.isfinite(p):
+        return 'p = \\mathrm{n/a}'
+    if p >= 1e-3:
+        return f'p = {p:.2g}'
+    mant, exp = f'{p:.1e}'.split('e')
+    return f'p = {mant} \\cdot 10^{{{int(exp)}}}'
+
+
+def plot_noise_ablation_paired(results_folder, benchmarks, metrics=('RMSE', 'NLL'),
+                               noise_a='joint', noise_b='aleatoric', output_folder=None,
+                               filename='noise_ablation_paired.pdf'):
+    """Per-seed paired scatter of two removal criteria (x: noise_a, y: noise_b).
+
+    One panel per (metric, benchmark); one dot per seed. Seeds where both
+    criteria give the identical model sit on the diagonal in gray; seeds that
+    differ are colored. Points above y = x are seeds where noise_a is better
+    (all metrics here are lower-is-better). Each panel reports the win counts
+    and the paired Wilcoxon p-value over the differing seeds.
+
+    Args:
+        results_folder: Folder with per-seed '<benchmark>_<noise>.json' files
+            ({seed: {metric: value}}).
+        benchmarks: List of (panel title, file stem) pairs.
+        metrics: Metrics to plot, one row each.
+        noise_a, noise_b: The two criteria to compare (x and y axis).
+        output_folder: Where to save (defaults to the package figures dir).
+        filename: Output file name.
+    """
+    import json
+    from scipy.stats import wilcoxon
+
+    theme = bundles.neurips2024()
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(theme)
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": True})
+    plt.rcParams.update({"legend.frameon": False})
+
+    color_diff = "#1D6996"
+    color_same = "#B0B0B0"
+    labels = {'joint': 'joint', 'aleatoric': 'aleatoric only', 'aleatoric_scaled': 'aleatoric only'}
+
+    n_rows, n_cols = len(metrics), len(benchmarks)
+    figsize = figsizes.neurips2024(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.0)['figure.figsize']
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
+
+    for col, (title, stem) in enumerate(benchmarks):
+        ra = json.load(open(os.path.join(results_folder, f"{stem}_{noise_a}.json")))
+        rb = json.load(open(os.path.join(results_folder, f"{stem}_{noise_b}.json")))
+        seeds = sorted(set(ra) & set(rb), key=int)
+        for row, metric in enumerate(metrics):
+            ax = axes[row, col]
+            a = np.array([ra[s][metric] for s in seeds])
+            b = np.array([rb[s][metric] for s in seeds])
+            same = np.isclose(a, b)
+
+            ax.scatter(a[same], b[same], s=10, color=color_same, linewidth=0, zorder=2)
+            ax.scatter(a[~same], b[~same], s=12, color=color_diff, linewidth=0, zorder=3)
+
+            lo = min(a.min(), b.min())
+            hi = max(a.max(), b.max())
+            pad = 0.05 * (hi - lo)
+            ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color='black',
+                    linestyle='--', linewidth=0.8, alpha=0.7, zorder=1)
+            log_axes = hi - lo > 10
+            if log_axes:
+                # Heavy right tail (a few badly overconfident seeds).
+                ax.set_xscale('symlog', linthresh=1.0)
+                ax.set_yscale('symlog', linthresh=1.0)
+            else:
+                ax.set_xlim(lo - pad, hi + pad)
+                ax.set_ylim(lo - pad, hi + pad)
+            if not log_axes:
+                ax.set_aspect('equal', adjustable='box')
+
+            d = b[~same] - a[~same]
+            wins_a, wins_b = int((d > 0).sum()), int((d < 0).sum())
+            p = wilcoxon(d).pvalue if len(d) > 5 else float('nan')
+            ax.text(0.04, 0.96,
+                    f"{labels[noise_a]} better: {wins_a}\n{labels[noise_b]} better: {wins_b}\n"
+                    f"identical: {int(same.sum())}\n${_latex_p(p)}$",
+                    transform=ax.transAxes, va='top', ha='left', fontsize=6)
+
+            ax.grid(True, alpha=0.3, linewidth=0.5)
+            for spine in ax.spines.values():
+                spine.set_linewidth(1.0)
+            if row == 0:
+                ax.set_title(title)
+            ax.set_xlabel(f"{metric} ({labels[noise_a]})")
+            ax.set_ylabel(f"{metric} ({labels[noise_b]})")
+
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(output_folder, exist_ok=True)
+    filepath = os.path.join(output_folder, filename)
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Noise ablation plot saved to {filepath}")
+    plt.close(fig)
+
+
+def _latex_p_short(p):
+    """Compact p-value for narrow panels: 'p = 0.014' or 'p < 10^{-k}'."""
+    if not np.isfinite(p):
+        return 'p = \\mathrm{n/a}'
+    if p >= 1e-3:
+        return f'p = {p:.2g}'
+    return f'p < 10^{{{int(np.ceil(np.log10(p)))}}}'
+
+
+def _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b):
+    """Per-seed values for each panel: [(key, label, values_a, values_b)]."""
+    import json
+    ra = json.load(open(os.path.join(results_folder, f"{stem}_{noise_a}.json")))
+    rb = json.load(open(os.path.join(results_folder, f"{stem}_{noise_b}.json")))
+    seeds = sorted(set(ra) & set(rb), key=int)
+    panels = []
+    for m in metrics:
+        panels.append((m, m, np.array([ra[s][m] for s in seeds]), np.array([rb[s][m] for s in seeds])))
+    panels.append(('removed', r'\# removed',
+                   np.array([num_train_samples - ra[s]['n_opt'] for s in seeds], dtype=float),
+                   np.array([num_train_samples - rb[s]['n_opt'] for s in seeds], dtype=float)))
+    return panels
+
+
+def _draw_noise_bar_panel(ax, label, va, vb, colors, tick_labels):
+    """Two bars: the mean over seeds of each criterion."""
+    means = [va.mean(), vb.mean()]
+    ax.bar([0, 1], means, width=0.7, color=colors, zorder=2)
+    ax.axhline(0, color='black', linewidth=0.6)
+    lo, hi = min(0.0, *means), max(0.0, *means)
+    span = hi - lo
+    ax.set_ylim(lo - (0.1 * span if lo < 0 else 0.0), hi + 0.1 * span)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(tick_labels, rotation=45, ha='right')
+    ax.set_title(label)
+    ax.grid(True, axis='y', alpha=0.3, linewidth=0.5)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+
+
+def _apply_noise_ablation_style(rel_width):
+    plt.rcParams.update(axes_style("white"))
+    plt.rcParams.update(bundles.neurips2024(rel_width=rel_width))
+    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": True})
+
+
+_NOISE_COLORS = ("#1D6996", "#94346E")
+_NOISE_NAMES = {'joint': 'joint', 'aleatoric': 'aleatoric', 'aleatoric_scaled': 'aleatoric'}
+
+
+def plot_noise_ablation_bars(results_folder, stem, num_train_samples, title=None,
+                             metrics=('RMSE', 'NLL'), noise_a='joint', noise_b='aleatoric',
+                             output_folder=None, filename=None):
+    """Bar plot (mean over seeds) comparing two removal criteria on one
+    benchmark: one panel per metric plus one for the number of removed
+    samples, two bars each.
+
+    Args:
+        results_folder: Folder with per-seed '<stem>_<noise>.json' files
+            ({seed: {metric: value, 'n_opt': retained samples}}).
+        stem: Benchmark file stem.
+        num_train_samples: Initial training-set size (removed = this - n_opt).
+        title: Figure title.
+        metrics: Metrics to plot (lower is better).
+        noise_a, noise_b: The two criteria to compare.
+        output_folder: Where to save (defaults to the package figures dir).
+        filename: Output file name (default 'noise_ablation_bars_<stem>.pdf').
+    """
+    _apply_noise_ablation_style(0.5)
+    panels = _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b)
+    figsize = figsizes.neurips2024(rel_width=0.5, nrows=1, ncols=len(panels),
+                                   height_to_width_ratio=1.6)['figure.figsize']
+    fig, axes = plt.subplots(1, len(panels), figsize=figsize)
+    for ax, (_, label, va, vb) in zip(np.atleast_1d(axes), panels):
+        _draw_noise_bar_panel(ax, label, va, vb, _NOISE_COLORS,
+                              [_NOISE_NAMES[noise_a], _NOISE_NAMES[noise_b]])
+    if title:
+        fig.suptitle(title)
+
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(output_folder, exist_ok=True)
+    filepath = os.path.join(output_folder, filename or f"noise_ablation_bars_{stem}.pdf")
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Noise ablation bar plot saved to {filepath}")
+    plt.close(fig)
+
+
+def plot_noise_ablation_bars_grid(results_folder, benchmarks, metrics=('RMSE', 'NLL'),
+                                  noise_a='joint', noise_b='aleatoric', output_folder=None,
+                                  filename='noise_ablation_bars.pdf'):
+    """Joint vs aleatoric-only removal criterion, one titled subfigure per
+    benchmark side by side in one full-text-width figure. Each subfigure has
+    one small panel per quantity (metrics and number of removed samples, each
+    on its own y-scale, named by its x-label) with one bar per criterion
+    (mean over seeds), styled like plot_bar_comparison
+    (Forgetting-to-Improve purple for joint) with one shared legend.
+
+    Args:
+        results_folder: Folder with per-seed '<stem>_<noise>.json' files.
+        benchmarks: List of (title, stem, num_train_samples), left to right.
+        metrics, noise_a, noise_b: As in plot_noise_ablation_bars.
+        output_folder: Where to save (defaults to the package figures dir).
+        filename: Output file name.
+    """
+    from matplotlib.patches import Patch
+
+    _apply_noise_ablation_style(1.0)
+    colors = {noise_a: '#5F4690', noise_b: '#38A6A5'}
+    alphas = {noise_a: 0.9, noise_b: 0.4}
+    names = {noise_a: 'joint', noise_b: 'aleatoric only'}
+
+    n_panels = len(metrics) + 1
+    figsize = figsizes.neurips2024(nrows=1, ncols=n_panels * len(benchmarks),
+                                   height_to_width_ratio=1.4)['figure.figsize']
+    fig = plt.figure(figsize=figsize)
+    subfigs = np.atleast_1d(fig.subfigures(1, len(benchmarks), wspace=0.12))
+    for subfig, (title, stem, num_train_samples) in zip(subfigs, benchmarks):
+        panels = _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b)
+        axes = np.atleast_1d(subfig.subplots(1, n_panels))
+        for ax, (_, label, va, vb) in zip(axes, panels):
+            means = [va.mean(), vb.mean()]
+            for i, (noise, m) in enumerate(zip((noise_a, noise_b), means)):
+                ax.bar(i, m, width=0.8, color=colors[noise], alpha=alphas[noise],
+                       edgecolor=colors[noise], linewidth=1.0, zorder=2)
+            ax.axhline(0, color='black', linewidth=0.6)
+            lo, hi = min(0.0, *means), max(0.0, *means)
+            span = hi - lo
+            ax.set_ylim(lo - (0.1 * span if lo < 0 else 0.0), hi + 0.1 * span)
+            ax.set_xticks([])
+            ax.set_xlabel(label)
+            ax.grid(True, axis='y', alpha=0.3, linewidth=0.5)
+            for spine in ax.spines.values():
+                spine.set_linewidth(0.8)
+        subfig.suptitle(title)
+
+    handles = [Patch(facecolor=colors[n], alpha=alphas[n], edgecolor=colors[n], linewidth=1.0)
+               for n in (noise_a, noise_b)]
+    fig.legend(handles, [names[noise_a], names[noise_b]], loc='upper center',
+               bbox_to_anchor=(0.5, 0.0), ncol=2, frameon=False)
+
+    if output_folder is None:
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
+    os.makedirs(output_folder, exist_ok=True)
+    filepath = os.path.join(output_folder, filename)
+    fig.savefig(filepath, bbox_inches='tight', dpi=300)
+    print(f"Noise ablation bar plot saved to {filepath}")
+    plt.close(fig)

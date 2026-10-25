@@ -8,7 +8,6 @@ from .helper.plot_gp import (
     plot_predictions_comparison,
     plot_calibration_comparison,
     plot_curvature_condition_comparison,
-    _uses_jacobian_kernel,
 )
 
 
@@ -31,6 +30,8 @@ def run_single_experiment(config, method, objective_name, objective_func, object
         show_hessian=config['show_hessian'],
         compare_optimal=config.get('compare_optimal', False),
         calculate_convexity=config.get('calculate_convexity', False),
+        removal_threshold=config.get('removal_threshold', 0.0),
+        map_noise=config.get('map_noise', False),
         objective_type=objective_type,
         feature_subset=config.get('feature_subset', None),
         kernel_config=config.get('kernel_config', None),
@@ -220,10 +221,12 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
         # Generate comparison plot
         seed = config['seeds'][0]
         objective_name = config['objectives'][0]
-        # Real LaTeX rendering for jacobian/NN-kernel comparisons (e.g.
-        # comparison_*_jacobian.yaml); plain mathtext elsewhere to avoid
-        # requiring a LaTeX install.
-        usetex = _uses_jacobian_kernel(config.get('kernel_config'))
+        # Real LaTeX rendering for every single-comparison plot (axis labels,
+        # title, legend) -- originally gated on the jacobian/NN kernel only,
+        # but a real LaTeX install has proven reliably available wherever
+        # this runs, so there's no reason to fall back to mathtext for
+        # other kernels (e.g. the periodic-kernel comparisons).
+        usetex = True
         plot_predictions_comparison(
             objective_func,
             x,

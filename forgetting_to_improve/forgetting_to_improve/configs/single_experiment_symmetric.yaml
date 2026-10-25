@@ -14,6 +14,8 @@ experiment:
   show_hessian: true
   compare_optimal: false
   calculate_convexity: true
+  removal_threshold: 0.01
+  map_noise: true
 kernel:
   - type: 'rbf'
     length_scale: 1.5

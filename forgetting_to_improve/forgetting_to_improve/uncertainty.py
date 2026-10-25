@@ -255,6 +255,7 @@ def calculate_aleatoric_uncertainty_influence(
     y_samples: torch.Tensor,
     model: gpytorch.models.GP,
     x_samples: torch.Tensor,
+    use_prior_a: bool = False,
 ) -> torch.Tensor:
     """
     Calculate the influence of each training point on the MLE noise estimate sigma_w^2.
@@ -264,6 +265,9 @@ def calculate_aleatoric_uncertainty_influence(
         y_samples: Training targets, shape (N,)
         model: The fitted GP model
         x_samples: Training inputs, shape (N, D)
+        use_prior_a: Use the noise prior's actual concentration a in the
+            -(a-1)/sigma_w^4 term instead of the hard-coded a=1.1 (needed for
+            the criterion to equal dJ/dh when a != 1.1)
         
     Returns:
         aleatoric_influence: d(sigma_w^2) / d(h_i) for each i, shape (N,)
@@ -349,7 +353,7 @@ def calculate_aleatoric_uncertainty_influence(
         noise_prior = _get_noise_prior(model.likelihood)
         if noise_prior is not None and hasattr(noise_prior, 'concentration'):
             a = noise_prior.concentration.item()
-        prior_contr = (1.1 - 1) / noise_level ** 2
+        prior_contr = ((a if use_prior_a else 1.1) - 1) / noise_level ** 2
 
     return - (Enum_1 - Enum_2 - Enum_target) / (H - prior_contr)
 
@@ -544,6 +548,46 @@ def calculate_aleatoric_hessian(
     return 0.5 * (H + H.T)
 
 
+def solve_map_noise(
+    model: gpytorch.models.GP,
+    x_samples: torch.Tensor,
+    y_samples: torch.Tensor,
+    n_newton_steps: int = 8,
+    max_step_fraction: float = 0.5,
+) -> float:
+    """MAP-II noise sigma_w^2 for the current (x_samples, y_samples).
+
+    Same bisection seed + damped Newton refinement as compute_joint_negJ_hessian
+    uses at h=0, so setting model.likelihood.noise to this value makes
+    calculate_uncertainty_influence's criterion equal to the autodiff dJ/dh
+    that the curvature analysis is based on.
+    """
+    if x_samples.ndim == 1:
+        x_samples = x_samples.unsqueeze(-1)
+    with torch.no_grad():
+        K = model.covar_module(x_samples, x_samples).evaluate()
+        n = K.shape[0]
+        I = torch.eye(n, dtype=K.dtype, device=K.device)
+
+        a, b = 1.0, 0.0
+        noise_prior = _get_noise_prior(model.likelihood)
+        if noise_prior is not None and hasattr(noise_prior, 'concentration'):
+            a = noise_prior.concentration.item()
+            b = noise_prior.rate.item()
+
+        s = _robust_sigma_w2_seed(K, y_samples, a, b, model.likelihood.noise.item())
+        for _ in range(n_newton_steps):
+            A_inv = torch.linalg.solve(K + s * I, I)
+            alpha1 = A_inv @ y_samples
+            alpha2 = A_inv @ alpha1
+            g = 0.5 * torch.dot(alpha1, alpha1) - 0.5 * torch.trace(A_inv) + (a - 1.0) / s - b
+            g_prime = -torch.dot(alpha1, alpha2) + 0.5 * torch.trace(A_inv @ A_inv) - (a - 1.0) / (s * s)
+            g_prime_safe = torch.sign(g_prime + 1e-30) * torch.clamp(g_prime.abs(), min=1e-6)
+            step = torch.clamp(g / g_prime_safe, min=-max_step_fraction * s, max=max_step_fraction * s)
+            s = s - step
+    return s.item()
+
+
 def map_ii_stationarity_residual(
     A_inv: torch.Tensor,
     y_samples: torch.Tensor,
@@ -576,6 +620,7 @@ def calculate_uncertainty_influence(
     x_test: torch.Tensor,
     check_stationarity: bool = False,
     stationarity_tol: float = 1e-2,
+    use_prior_a: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Calculate the uncertainty (epistemic and aleatoric) of the GP predictions at points X.
@@ -632,6 +677,8 @@ def calculate_uncertainty_influence(
     epistemic_influence, factor = (
         calculate_epistemic_uncertainty_influence(A_inv, model, x_samples, x_test)
     )
-    aleatoric_influence = calculate_aleatoric_uncertainty_influence(A_inv, y_samples, model, x_samples)
+    aleatoric_influence = calculate_aleatoric_uncertainty_influence(
+        A_inv, y_samples, model, x_samples, use_prior_a=use_prior_a
+    )
 
     return epistemic_influence, aleatoric_influence, factor

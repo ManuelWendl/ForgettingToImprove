@@ -56,10 +56,19 @@ CONFIGS=(
     # "ackley_6d_jacobian.yaml"
     # "augmented_rosenbrock_jacobian.yaml"
     # "branin_jacobian.yaml"
-    "griewank_jacobian.yaml"
+    # "griewank_jacobian.yaml"
     # "hartmann_6d_jacobian.yaml"
     # "holder_table_jacobian.yaml"
     # "levy_jacobian.yaml"
+    # "ackley_2d_jacobian_noisy.yaml"
+    # "ackley_6d_jacobian_noisy.yaml"
+    # "augmented_rosenbrock_jacobian_noisy.yaml"
+    # "branin_jacobian_noisy.yaml"
+    # "griewank_jacobian_noisy.yaml"
+    # "hartmann_6d_jacobian_noisy.yaml"
+    # "holder_table_jacobian_noisy.yaml"
+    # "levy_jacobian_noisy.yaml"
+    "ackley_2d_identity_jacobian.yaml"
 )
 
 # CONFIGS=(
