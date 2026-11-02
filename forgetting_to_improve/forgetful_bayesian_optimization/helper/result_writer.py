@@ -173,12 +173,11 @@ def compute_statistics(all_results: List[List[float]], optimal_value: Any,
 
     Args:
         all_results: List of best observed values for each seed
-        optimal_value: Optimal value of the objective. May be a scalar (same
-            optimum for every iteration) or an array/list of length equal to
-            the number of iterations (to support changing tasks).
+        optimal_value: Optimal value of the objective, or one value per
+            iteration (AutoML CSV benchmark, where the task changes)
         all_iteration_times: List of iteration times for each seed (optional)
-        task_schedule: List mapping iteration index to task_id (optional).
-            If provided, computes per-task regret statistics.
+        task_schedule: Task id of every iteration (optional, AutoML CSV benchmark);
+            if given, regret statistics are also computed per task.
 
     Returns:
         Dictionary containing statistics
@@ -220,7 +219,7 @@ def compute_statistics(all_results: List[List[float]], optimal_value: Any,
         }
     }
 
-    # Compute per-task statistics if task schedule provided
+    # Per-task statistics (AutoML CSV benchmark)
     if task_schedule is not None:
         task_schedule_arr = np.array(task_schedule)
         unique_tasks = np.unique(task_schedule_arr)
@@ -283,36 +282,12 @@ def compute_statistics(all_results: List[List[float]], optimal_value: Any,
     return stats
 
 
-def compute_regret(best_observed: List[float], optimal_value: float) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Compute simple and cumulative regret.
-    
-    Args:
-        best_observed: List of best observed values at each iteration
-        optimal_value: Optimal value of the objective
-        
-    Returns:
-        Tuple of (simple_regret, cumulative_regret)
-    """
-    best_observed_array = np.array(best_observed)
-    simple_regret = optimal_value - best_observed_array
-    cumulative_regret = np.cumsum(simple_regret)
-
-    return simple_regret, cumulative_regret
-# The original compute_regret function above is left in place for
-# backward-compatibility (it will be overridden by this definition when
-# the module is imported).  We redefine it immediately below to support
-# per-iteration optimal values required by the continuous CSV benchmark.
-
-# replacement compute_regret with support for per-iteration optima and
-# non-negative clipping.  Placed at end so it overrides the original
-# simple version defined above.
 def compute_regret(best_observed: List[float], optimal_value: Any) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute simple and cumulative regret with flexible optimum.
+    """Compute simple and cumulative regret (simple regret clipped at 0).
 
     Args:
         best_observed: List of best values seen per iteration.
-        optimal_value: Scalar or sequence of optima (one per iteration).
+        optimal_value: Scalar optimum, or one optimum per iteration.
     Returns:
         simple_regret, cumulative_regret arrays (both non-negative).
     """

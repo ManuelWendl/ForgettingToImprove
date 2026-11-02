@@ -8,9 +8,7 @@ experiment:
   # Target: Residuary resistance per unit weight of displacement
   # Normalized data centered at 0 with std ~1
   
-  # A_limits: Active learning region (smooth, low-noise region)
-  # Optimized region: 21 points with avg local variance 0.0039 (very smooth)
-  # Target value range: [-0.693, -0.650] with low std: 0.012
+  # A_limits: target region (a smooth, low-noise region containing 21 data points)
   A_limits: [
     [-0.052, 0.160],  # LCB - Longitudinal position of center of buoyancy
     [-2.178, 1.607],  # PC - Prismatic coefficient
@@ -20,7 +18,7 @@ experiment:
     [-1.761, -0.967]  # Froude - Froude number
   ]
   
-  # X_limits: Full input space (covers ~99.7% of normalized data)
+  # X_limits: input domain
   X_limits: [
     [-5.0, 5.0],  # LCB
     [-5.0, 5.0],  # PC
@@ -31,12 +29,12 @@ experiment:
   ]
   
   num_samples: 308  # Total number of data points in Yacht dataset
-  num_train_samples: 40  # Initial training samples
-  num_A_samples: 50      # Samples to select from active learning region
-  seed: 100              # Number of random seeds for statistical analysis
+  num_train_samples: 40  # training samples
+  num_A_samples: 50      # test points in the target region
+  seed: 100              # seeds 0-99
   fixed_kernel: false
+  noise_init: data_variance  # initial GP noise = var(y_train) of each seed
   show_plots: false      # No plots for multidimensional data
-  show_hessian: false
   feature_subset: null   # Use all 6 features
   
   # Kernel configuration for GP

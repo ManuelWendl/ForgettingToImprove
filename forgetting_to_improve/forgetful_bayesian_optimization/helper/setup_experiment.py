@@ -1,14 +1,10 @@
 import torch
 from typing import Dict, Any, Callable, Tuple, List
 from botorch.models import SingleTaskGP
-from botorch.test_functions import Ackley, Branin, Rosenbrock, Levy, Beale, HolderTable, Griewank, Hartmann, AugmentedRosenbrock, SixHumpCamel, StyblinskiTang
-from botorch.acquisition import (
-    qUpperConfidenceBound, 
-    qLogExpectedImprovement, 
-    qLogNoisyExpectedImprovement
-)
+from botorch.test_functions import Ackley, Branin, Levy, HolderTable, Griewank, Hartmann, AugmentedRosenbrock
+from botorch.acquisition import qUpperConfidenceBound, qLogExpectedImprovement
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.kernels import MaternKernel, RBFKernel, ScaleKernel
+from gpytorch.kernels import MaternKernel, ScaleKernel
 from gpytorch.kernels.kernel import AdditiveKernel
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval, GreaterThan
@@ -33,15 +29,10 @@ def get_objective_function(objective_name: str) -> Tuple[Callable, torch.Tensor]
         'botorch_ackley_6d': (Ackley(dim=4, negate=True), torch.tensor([[-10.0] * 4, [30.0] * 4], dtype=torch.float64)),
         'botorch_branin': (Branin(negate=True), torch.tensor([[-5.0, 10.0], [0.0, 15.0]], dtype=torch.float64)),
         'botorch_griewank': (Griewank(negate=True), torch.tensor([[-50.0] * 2, [20.0] * 2], dtype=torch.float64)),
-        'botorch_rosenbrock_2d': (Rosenbrock(dim=2, negate=True), torch.tensor([[-5.0] * 2, [10.0] * 2], dtype=torch.float64)),
         'botorch_levy': (Levy(dim=2, negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64)),
-        'botorch_beal': (Beale(negate=True), torch.tensor([[-4.5] * 2, [4.5] * 2], dtype=torch.float64)),
         'botorch_holder_table': (HolderTable(negate=True), torch.tensor([[-10.0] * 2, [10.0] * 2], dtype=torch.float64)),
         'botorch_hartmann_6d': (Hartmann(dim=6, negate=True), torch.tensor([[0.0] * 6, [1.0] * 6], dtype=torch.float64)),
         'botorch_augmented_rosenbrock': (AugmentedRosenbrock(dim=4, negate=True), torch.tensor([[-5.0,-5.0, 0, 0], [10.0,10.0,1.0, 1.0]], dtype=torch.float64)),
-        'botorch_six_hump_camel': (SixHumpCamel(negate=True), torch.tensor([[-3.0, -2.0], [3.0, 2.0]], dtype=torch.float64)),
-        'botorch_styblinski_tang_2d': (StyblinskiTang(dim=2, negate=True), torch.tensor([[-5.0] * 2, [5.0] * 2], dtype=torch.float64)),
-        'botorch_styblinski_tang_4d': (StyblinskiTang(dim=4, negate=True), torch.tensor([[-5.0] * 4, [5.0] * 4], dtype=torch.float64))
     }
     
     if objective_name not in objective_map:
@@ -60,7 +51,7 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
         input_dim: Input dimensionality
         train_x, train_y: Optional current BO data. Only used by the 'jacobian'
             (last-layer linearised-Laplace) kernel, whose MLP is (re)trained on
-            them. Ignored by matern/rbf.
+            them. Ignored by matern.
 
     Returns:
         GPyTorch kernel module
@@ -85,18 +76,6 @@ def create_kernel_from_config(kernel_configs: List[Dict[str, Any]], input_dim: i
             # LogNormal(0,1) prior for lengthscale
             kernel = MaternKernel(
                 nu=nu, 
-                ard_num_dims=input_dim,
-                lengthscale_prior=LogNormalPrior(0, 1),
-                lengthscale_constraint=GreaterThan(1e-4)
-            )
-            if length_scale != 1.0:
-                kernel.lengthscale = length_scale
-            kernels.append(kernel)
-            
-        elif kernel_type == 'rbf':
-            length_scale = kernel_config.get('length_scale', 1.0)
-            # LogNormal(0,1) prior for lengthscale
-            kernel = RBFKernel(
                 ard_num_dims=input_dim,
                 lengthscale_prior=LogNormalPrior(0, 1),
                 lengthscale_constraint=GreaterThan(1e-4)
@@ -162,19 +141,18 @@ def initialize_model_with_config(train_x: torch.Tensor, train_y: torch.Tensor,
     input_dim = train_x.shape[-1]
     
     # Create covariance module from config. train_x/train_y are forwarded so the
-    # jacobian kernel can (re)fit its MLP on the current data; no-op for matern/rbf.
+    # jacobian kernel can (re)fit its MLP on the current data; no-op for matern.
     covar_module = create_kernel_from_config(kernel_configs, input_dim, train_x, train_y)
     
-    # Create likelihood with noise constraint and prior for stability
+    # Likelihood: Gamma(2, 0.05) noise prior, noise bounded by 10 * alpha
     noise_level = config.get('alpha', 0.0)
     if noise_level > 0:
-        # More flexible prior for better adaptation
         likelihood = GaussianLikelihood(
-            noise_prior=GammaPrior(2, 0.05),  # More flexible: mean=1.5, std=1.22
+            noise_prior=GammaPrior(2, 0.05),
             noise_constraint=Interval(1e-6, noise_level * 10.0)
         )
     else:
-        # Even for "noiseless" case, use small noise for numerical stability
+        # Noise-free objective: keep a small noise for numerical stability
         likelihood = GaussianLikelihood(
             noise_prior=GammaPrior(2, 0.05),
             noise_constraint=Interval(1e-6, 1e-2)
@@ -211,7 +189,5 @@ def get_acquisition_function(acquisition_config: Dict[str, Any]) -> Callable:
         return lambda model, X_baseline: qUpperConfidenceBound(model, beta=beta)
     elif acq_name == 'qLogExpectedImprovement':
         return lambda model, X_baseline: qLogExpectedImprovement(model, best_f=X_baseline.max())
-    elif acq_name == 'qLogNoisyExpectedImprovement':
-        return lambda model, X_baseline: qLogNoisyExpectedImprovement(model, X_baseline=X_baseline)
     else:
         raise ValueError(f"Unknown acquisition function: {acq_name}")

@@ -1,0 +1,68 @@
+# 100-seed statistical comparison, jacobian (NN) kernel.
+# Same setup as statistical_twitter_jacobian.yaml (none vs sequential
+# removal with per-removal fine-tuning), with this benchmark's own region.
+experiment:
+  type: statistic
+  method:
+  - none
+  - sequential
+  objective: casp
+  noise: joint
+  A_limits:
+  - - -1.468
+    - -1.44
+  - - -1.338
+    - -1.312
+  - - -0.509
+    - -0.48
+  - - -1.269
+    - -1.243
+  - - -1.438
+    - -1.409
+  - - -1.433
+    - -1.406
+  - - -1.122
+    - -1.092
+  - - -1.036
+    - -1.016
+  - - 1.657
+    - 1.682
+  X_limits:
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  - - -5.0
+    - 5.0
+  num_samples: 45000
+  num_train_samples: 200
+  num_A_samples: 50
+  seed: 100
+  fixed_kernel: true
+  show_plots: false
+  feature_subset: null
+  kernel:
+  - type: jacobian
+    hidden: 32
+    depth: 2
+    activation: relu
+    last_layer: true
+    epochs: 800
+    lr: 0.01
+    prior_prec: 1.0
+    finetune_epochs: 600
+    finetune_lr: 0.01
+  - type: white
+    noise_level: 1.0

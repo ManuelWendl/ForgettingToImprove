@@ -17,9 +17,8 @@ def filter_samples(
     """
     Filter training samples based on their influence on predictions in the target region.
     
-    This function implements forgetting-based sample selection methods (joint, epistemic).
-    Baseline methods (relevance_pursuit, warped_gp, heteroscedastic_gp) are handled 
-    separately in baseline_models.py.
+    Implements the forgetting-based methods (joint, epistemic); the baselines are
+    in baseline_models.py and opti_loop.py.
     
     Args:
         model: GP model
@@ -66,8 +65,7 @@ def filter_samples(
                 y_samples=y_samples.squeeze(-1),
                 x_test=target_region.samples,
                 max_iter=1,
-                noise_type=algorithm,
-                show_hessian=False
+                noise_type=algorithm
             )
             y_samples = y_samples.unsqueeze(-1)
             

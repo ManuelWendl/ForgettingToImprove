@@ -1,0 +1,23 @@
+experiment:
+  # Noise ablation: joint vs aleatoric-only removal criterion (F2I only), same
+  # benchmark as statistical_comparison_sin_asymmetric_lengthscale_increase.yaml
+  # but with the initial GP noise from the kernel config (white noise_level).
+  type: statistic
+  method: sequential
+  objective: sin_asymmetric_lengthscale_increase
+  noise: [joint, aleatoric]
+  A_limits: [-3, 3]
+  X_limits: [-10, 10]
+  num_samples: 1000
+  num_train_samples: 20
+  num_A_samples: 50
+  seed: 100  # seeds 0-99
+  fixed_kernel: false
+  noise_init: config  # initial GP noise = white noise_level below
+  show_plots: false
+  kernel:
+  - type: 'matern'
+    length_scale: 1
+    nu: 2.5
+  - type: white
+    noise_level: 0.1

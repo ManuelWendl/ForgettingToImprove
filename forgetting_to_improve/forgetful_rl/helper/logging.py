@@ -4,8 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 import collections
 import csv
+import json
 import pathlib
-from omegaconf import OmegaConf
 from typing import Counter, Dict, List, Mapping, Tuple, Union
 
 import termcolor
@@ -125,6 +125,9 @@ class Logger(object):
         self, cfg: omegaconf.DictConfig, log_dir: Union[str, pathlib.Path], enable_back_compatible: bool = False
     ):
         self._log_dir = pathlib.Path(log_dir)
+        # Every log_data call is also appended as one JSON line (read by the
+        # plotting scripts, independent of wandb)
+        self._jsonl_path = self._log_dir / "results.jsonl"
         self._groups: Dict[str, Tuple[MetersGroup, int, str]] = {}
         self._group_steps: Counter[str] = collections.Counter()
 
@@ -178,6 +181,13 @@ class Logger(object):
                 keyword must be a variable name in the log format passed when creating this group.
         """
         wandb.log(data, commit=True)
+        record = {
+            key: (value.item() if isinstance(value, torch.Tensor) else value)
+            for key, value in data.items()
+        }
+        with open(self._jsonl_path, "a") as f:
+            # numpy scalars (np.int64, np.float32, ...) -> Python numbers
+            f.write(json.dumps(record, default=lambda o: o.item() if hasattr(o, "item") else str(o)) + "\n")
         if group_name not in self._groups:
             raise ValueError(f"Group {group_name} has not been registered.")
         meter_group, dump_frequency, color = self._groups[group_name]

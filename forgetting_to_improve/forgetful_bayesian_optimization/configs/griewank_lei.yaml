@@ -8,9 +8,9 @@ bayes_opt:
   acquisition_params: {}
   save_results: true
   plot_results: true
-  results_path: botorch_griewank_lei_statistical.txt
+  results_path: lei/botorch_griewank_lei_statistical.txt
   sample_optimization:
-    algorithm: [none, joint, target_region]
+    algorithm: [none, joint, warped_gp, relevance_pursuit]
     method: sequential 
     min_samples: 10
   kernel:

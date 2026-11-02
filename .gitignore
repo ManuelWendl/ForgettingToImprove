@@ -1,8 +1,26 @@
+# Experiment outputs
 *results/
 *figures/
+exp/
+outputs/
+multirun/
+wandb/
 custom_figure_folder/
-*__pycache__/
 
+# Local only: RL figures from the wandb project
+forgetting_to_improve/forgetful_rl/plotting/wandb_plots.py
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Environments and editors
 .venv/
+venv/
 .vscode/
+.claude/
+.idea/
+
 *.png

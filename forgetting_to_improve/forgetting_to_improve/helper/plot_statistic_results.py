@@ -1,85 +1,17 @@
+"""Figures of the transductive benchmarks: the bar comparison of all methods
+(plot_bar_comparison) and the joint vs aleatoric-only noise ablation
+(plot_noise_ablation_bars_grid, plot_noise_ablation_paired). See
+plot_transductive.py for the command line."""
+import json
 import os
 import re
-import numpy as np
+
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, RegularPolygon
-from matplotlib.path import Path
-from matplotlib.projections import register_projection
-from matplotlib.projections.polar import PolarAxes
-from matplotlib.spines import Spine
-from matplotlib.transforms import Affine2D
-from tueplots import bundles, figsizes
+import numpy as np
 from seaborn import axes_style
+from tueplots import bundles, figsizes
 
-
-def radar_factory(num_vars, frame='circle'):
-    """
-    Create a radar chart with `num_vars` axes.
-    
-    This function creates a RadarAxes projection and registers it.
-    
-    Parameters
-    ----------
-    num_vars : int
-        Number of variables for radar chart.
-    frame : {'circle', 'polygon'}
-        Shape of frame surrounding axes.
-    """
-    theta = np.linspace(0, 2*np.pi, num_vars, endpoint=False)
-
-    class RadarAxes(PolarAxes):
-        name = 'radar'
-        RESOLUTION = 1
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.set_theta_zero_location('N')
-
-        def fill(self, *args, closed=True, **kwargs):
-            """Override fill so that line is closed by default"""
-            return super().fill(closed=closed, *args, **kwargs)
-
-        def plot(self, *args, **kwargs):
-            """Override plot so that line is closed by default"""
-            lines = super().plot(*args, **kwargs)
-            for line in lines:
-                self._close_line(line)
-            return lines
-
-        def _close_line(self, line):
-            x, y = line.get_data()
-            if x[0] != x[-1]:
-                x = np.append(x, x[0])
-                y = np.append(y, y[0])
-                line.set_data(x, y)
-
-        def set_varlabels(self, labels):
-            self.set_thetagrids(np.degrees(theta), labels)
-
-        def _gen_axes_patch(self):
-            if frame == 'circle':
-                return Circle((0.5, 0.5), 0.5)
-            elif frame == 'polygon':
-                return RegularPolygon((0.5, 0.5), num_vars,
-                                      radius=.5, edgecolor="k")
-            else:
-                raise ValueError("Unknown value for 'frame': %s" % frame)
-
-        def _gen_axes_spines(self):
-            if frame == 'circle':
-                return super()._gen_axes_spines()
-            elif frame == 'polygon':
-                spine = Spine(axes=self,
-                              spine_type='circle',
-                              path=Path.unit_regular_polygon(num_vars))
-                spine.set_transform(Affine2D().scale(.5).translate(.5, .5)
-                                    + self.transAxes)
-                return {'polar': spine}
-            else:
-                raise ValueError("Unknown value for 'frame': %s" % frame)
-
-    register_projection(RadarAxes)
-    return theta
+from .plot_gp import latex_available
 
 
 def parse_results_file(filepath):
@@ -206,22 +138,25 @@ def normalize_metrics(data, metrics, methods_to_include=None):
     return normalized
 
 
-def plot_radar_comparison(results_folder, output_folder=None):
+def plot_bar_comparison(benchmarks, output_folder=None):
     """
-    Create radar plots comparing different methods across benchmarks.
-    
+    Bar plot comparing all methods on each benchmark: one panel per benchmark,
+    one group of bars per metric, scaled per metric so that the best method
+    is 1 and the worst 0.
+
     Parameters
     ----------
-    results_folder : str
-        Path to folder containing results .txt files
+    benchmarks : dict
+        Benchmark name -> parsed results table (parse_results_file). Panels
+        are ordered by name.
     output_folder : str, optional
-        Path to save output figures. If None, saves to figures/radar_plots/
+        Where to save benchmark_bar_comparison.pdf (default: the package's figures/).
     """
-    # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
+    plt.rcParams.update({"text.usetex": latex_available()})
     plt.rcParams.update({"legend.frameon": False})
     
     # Method mapping (sequential_joint first to plot first)
@@ -246,480 +181,6 @@ def plot_radar_comparison(results_folder, output_folder=None):
     
     # Metrics to plot
     metrics = ['MSE', 'MAE', 'NLL', 'CE', 'V-ECE', 'Sharpness']
-    
-    # Find all .txt files in the results folder
-    txt_files = []
-    for fname in os.listdir(results_folder):
-        if fname.endswith('.txt'):
-            txt_files.append(os.path.join(results_folder, fname))
-    
-    if not txt_files:
-        print(f"No .txt files found in {results_folder}")
-        return
-    
-    # Parse all files
-    benchmarks = {}
-    for filepath in txt_files:
-        # Extract benchmark name from filename
-        basename = os.path.splitext(os.path.basename(filepath))[0]
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
-        benchmark_name = basename.split('_fitting_comparison')[0]
-        
-        results = parse_results_file(filepath)
-        if results:
-            benchmarks[benchmark_name] = results
-    
-    if not benchmarks:
-        print("No valid results found in files")
-        return
-    
-    # Benchmark display name mapping
-    benchmark_display_names = {
-        'twitter': 'Dow Jones',
-        'boston': 'Boston Housing',
-        'casp': 'CASP',
-        'yacht': 'Yacht'
-    }
-    
-    # Create radar factory
-    num_metrics = len(metrics)
-    theta = radar_factory(num_metrics, frame='polygon')
-    
-    # Determine grid size
-    n_benchmarks = len(benchmarks)
-    n_cols = min(3, n_benchmarks)
-    n_rows = (n_benchmarks + n_cols - 1) // n_cols
-    
-    # Create figure
-    fig = plt.figure(figsize=(figsizes.neurips2024(nrows=n_rows, ncols=n_cols, 
-                                                     height_to_width_ratio=1.0)['figure.figsize']))
-    
-    # Plot each benchmark
-    for idx, (benchmark_name, data) in enumerate(sorted(benchmarks.items())):
-        ax = fig.add_subplot(n_rows, n_cols, idx + 1, projection='radar')
-        
-        # Normalize metrics (only considering methods we're plotting)
-        normalized_data = normalize_metrics(data, metrics, methods_to_include=list(method_mapping.keys()))
-        
-        # Plot all methods except sequential_joint first (so it appears on top)
-        for method_key in method_mapping.keys():
-            if method_key == 'sequential_joint':
-                continue  # Plot this last
-            if method_key in normalized_data:
-                values = [normalized_data[method_key].get(m, 0.0) for m in metrics]
-                # Close the radar line by appending the first value
-                values_closed = values + [values[0]]
-                theta_closed = np.append(theta, theta[0])
-                ax.plot(theta_closed, values_closed, 
-                       color=method_colors[method_key],
-                       linewidth=1.0,
-                       label=method_mapping[method_key],
-                       alpha=1.0)
-        
-        # Plot sequential_joint last so it appears on top
-        if 'sequential_joint' in normalized_data:
-            values = [normalized_data['sequential_joint'].get(m, 0.0) for m in metrics]
-            # Close the radar line by appending the first value
-            values_closed = values + [values[0]]
-            theta_closed = np.append(theta, theta[0])
-            ax.plot(theta_closed, values_closed, 
-                   color=method_colors['sequential_joint'],
-                   linewidth=2,
-                   label=method_mapping['sequential_joint'],
-                   alpha=1.0,
-                   zorder=10)  # Higher zorder to ensure it's on top
-        
-        # Find best method for each metric and color labels accordingly
-        # Only consider methods that are being plotted
-        metric_colors = []
-        for metric in metrics:
-            best_method = None
-            best_value = -1
-            for method_key in method_mapping.keys():  # Only check plotted methods
-                if method_key in normalized_data and metric in normalized_data[method_key]:
-                    val = normalized_data[method_key][metric]
-                    if val > best_value:
-                        best_value = val
-                        best_method = method_key
-            
-            # Use the color of the best method for this metric
-            if best_method and best_method in method_colors:
-                metric_colors.append(method_colors[best_method])
-            else:
-                metric_colors.append('black')  # Fallback color
-        
-        # Set variable labels with colors
-        ax.set_varlabels(metrics)
-        # Color each label
-        for label, color in zip(ax.get_xticklabels(), metric_colors):
-            label.set_color(color)
-        
-        # Set title with mapped display name
-        display_name = benchmark_display_names.get(benchmark_name, benchmark_name.replace('_', ' ').title())
-        ax.set_title(display_name,
-                    weight='bold', size=10, position=(0.5, 1.1),
-                    horizontalalignment='center', verticalalignment='center')
-        
-        # Configure radial limits - extend slightly beyond 1 to prevent clipping at edges
-        ax.set_ylim(0, 1.05)
-        ax.set_yticks([0, 1.0])
-        ax.set_yticklabels(['0', '1'], fontsize=7)
-        
-        # Grid styling
-        ax.grid(True, linewidth=0.5, color='gainsboro', alpha=0.7)
-    
-    # Create shared legend
-    handles, labels = ax.get_legend_handles_labels()
-    if handles:
-        # Reorder so Forgetting to Improve appears first in legend
-        # Find the index of 'Forgetting to Improve' in labels
-        try:
-            fti_idx = labels.index('Forgetting to Improve')
-            # Move it to the front
-            handles = [handles[fti_idx]] + handles[:fti_idx] + handles[fti_idx+1:]
-            labels = [labels[fti_idx]] + labels[:fti_idx] + labels[fti_idx+1:]
-        except ValueError:
-            pass  # If not found, keep original order
-        
-        fig.legend(handles, labels, 
-                  loc='upper center',
-                  bbox_to_anchor=(0.5, 0.1),
-                  ncol=3,
-                  frameon=False,
-                  fontsize=9,
-                  columnspacing=1.0,
-                  handlelength=2.0)
-    
-    # Adjust layout
-    plt.tight_layout(rect=[0, 0.08, 1, 0.98])
-    
-    # Save figure
-    if output_folder is None:
-        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures', 'radar_plots')
-    os.makedirs(output_folder, exist_ok=True)
-    
-    output_path = os.path.join(output_folder, 'benchmark_radar_comparison.pdf')
-    fig.savefig(output_path, bbox_inches='tight', dpi=300)
-    print(f"Radar plot saved to {output_path}")
-    plt.close()
-
-
-def plot_line_profile_comparison(results_folder, output_folder=None):
-    """
-    Create line profile plots comparing different methods across benchmarks.
-    
-    Parameters
-    ----------
-    results_folder : str
-        Path to folder containing results .txt files
-    output_folder : str, optional
-        Path to save output figures. If None, saves to figures/radar_plots/
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.neurips2024()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Method mapping (sequential_joint first to plot first)
-    method_mapping = {
-        'sequential_joint': 'Forgetting to Improve',
-        'none_joint': 'Homoscedastic GP',
-        'targetSampling_joint': 'Target Sampling',
-        'relevance_pursuit_joint': 'Relevance Pursuit',
-        'warped_gp_joint': 'Warped GP',
-        'heteroscedastic_gp_joint': 'Heteroscedastic GP'
-    }
-    
-    # Colors for each method (matching plot_gp.py style)
-    method_colors = {
-        'sequential_joint': '#5F4690',  # Purple for Forgetting to Improve
-        'none_joint': "#1D6996",
-        'targetSampling_joint': "#38A6A5",
-        'relevance_pursuit_joint': "#0F8554",
-        'warped_gp_joint': "#73AF48",
-        'heteroscedastic_gp_joint': "#EDAD08"
-    }
-    
-    # Line styles for better distinction
-    method_linestyles = {
-        'sequential_joint': '-',
-        'none_joint': '-',
-        'targetSampling_joint': '-',
-        'relevance_pursuit_joint': '-',
-        'warped_gp_joint': '-',
-        'heteroscedastic_gp_joint': '-'
-    }
-    
-    # Markers for each method
-    method_markers = {
-        'sequential_joint': 'o',
-        'none_joint': 's',
-        'targetSampling_joint': '^',
-        'relevance_pursuit_joint': 'D',
-        'warped_gp_joint': 'v',
-        'heteroscedastic_gp_joint': 'p'
-    }
-    
-    # Metrics to plot
-    metrics = ['MSE', 'MAE', 'NLL', 'CE', 'V-ECE', 'Sharpness']
-    
-    # Find all .txt files in the results folder
-    txt_files = []
-    for fname in os.listdir(results_folder):
-        if fname.endswith('.txt'):
-            txt_files.append(os.path.join(results_folder, fname))
-    
-    if not txt_files:
-        print(f"No .txt files found in {results_folder}")
-        return
-    
-    # Parse all files
-    benchmarks = {}
-    for filepath in txt_files:
-        # Extract benchmark name from filename
-        basename = os.path.splitext(os.path.basename(filepath))[0]
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
-        benchmark_name = basename.split('_fitting_comparison')[0]
-        
-        results = parse_results_file(filepath)
-        if results:
-            benchmarks[benchmark_name] = results
-    
-    if not benchmarks:
-        print("No valid results found in files")
-        return
-    
-    # Benchmark display name mapping
-    benchmark_display_names = {
-        'twitter': 'Dow Jones',
-        'boston': 'Boston Housing',
-        'casp': 'CASP',
-        'yacht': 'Yacht'
-    }
-    
-    # Determine grid size
-    n_benchmarks = len(benchmarks)
-    n_cols = min(3, n_benchmarks)
-    n_rows = (n_benchmarks + n_cols - 1) // n_cols
-    
-    # Create figure
-    fig, axes = plt.subplots(n_rows, n_cols, 
-                             figsize=figsizes.neurips2024(nrows=n_rows, ncols=n_cols, 
-                                                          height_to_width_ratio=0.8)['figure.figsize'])
-    
-    # Ensure axes is always a list
-    if n_benchmarks == 1:
-        axes = [axes]
-    else:
-        axes = axes.flatten() if n_benchmarks > 1 else [axes]
-    
-    # Plot each benchmark
-    for idx, (benchmark_name, data) in enumerate(sorted(benchmarks.items())):
-        ax = axes[idx]
-        
-        # Normalize metrics (only considering methods we're plotting)
-        normalized_data = normalize_metrics(data, metrics, methods_to_include=list(method_mapping.keys()))
-        
-        # X-axis positions for metrics
-        x_positions = np.arange(len(metrics))
-        
-        # Find best method for each metric
-        best_methods = []
-        for metric in metrics:
-            best_method = None
-            best_value = -1
-            for method_key in method_mapping.keys():
-                if method_key in normalized_data and metric in normalized_data[method_key]:
-                    val = normalized_data[method_key][metric]
-                    if val > best_value:
-                        best_value = val
-                        best_method = method_key
-            best_methods.append(best_method)
-        
-        # Plot all methods except sequential_joint first (so it appears on top)
-        for method_key in method_mapping.keys():
-            if method_key == 'sequential_joint':
-                continue  # Plot this last
-            if method_key in normalized_data:
-                values = [normalized_data[method_key].get(m, 0.0) for m in metrics]
-                ax.plot(x_positions, values, 
-                       color=method_colors[method_key],
-                       linewidth=1.5,
-                       linestyle=method_linestyles[method_key],
-                       marker='none',
-                       label=method_mapping[method_key],
-                       alpha=0.8)
-                
-                # Add markers only for best values
-                for i, (x, val, metric) in enumerate(zip(x_positions, values, metrics)):
-                    if best_methods[i] == method_key:
-                        ax.plot(x, val, 
-                               marker=method_markers[method_key],
-                               markersize=5,
-                               color=method_colors[method_key],
-                               zorder=5)
-        
-        # Plot sequential_joint last so it appears on top
-        if 'sequential_joint' in normalized_data:
-            values = [normalized_data['sequential_joint'].get(m, 0.0) for m in metrics]
-            ax.plot(x_positions, values, 
-                   color=method_colors['sequential_joint'],
-                   linewidth=2.5,
-                   linestyle=method_linestyles['sequential_joint'],
-                   marker='none',
-                   label=method_mapping['sequential_joint'],
-                   alpha=1.0,
-                   zorder=10)  # Higher zorder to ensure it's on top
-            
-            # Add markers only for best values
-            for i, (x, val, metric) in enumerate(zip(x_positions, values, metrics)):
-                if best_methods[i] == 'sequential_joint':
-                    ax.plot(x, val, 
-                           marker=method_markers['sequential_joint'],
-                           markersize=6,
-                           color=method_colors['sequential_joint'],
-                           zorder=15)
-        
-        # Determine row and column position
-        row = idx // n_cols
-        col = idx % n_cols
-        
-        # Configure axes
-        ax.set_xticks(x_positions)
-        # Only show x-tick labels in the bottom row
-        if row == n_rows - 1 or idx >= n_benchmarks - n_cols:
-            ax.set_xticklabels(metrics, rotation=45, ha='right')
-        else:
-            ax.set_xticklabels([])
-        
-        # Only show y-label in the first column
-        if col == 0:
-            ax.set_ylabel('Rel. Performance', fontsize=9)
-        
-        ax.set_ylim(-0.05, 1.1)
-        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
-        
-        # Only show y-tick labels in the first column
-        if col != 0:
-            ax.set_yticklabels([])
-        
-        ax.grid(True, linewidth=0.5, color='gainsboro', alpha=0.5, axis='y')
-        ax.set_axisbelow(True)
-        
-        # Set title with mapped display name
-        display_name = benchmark_display_names.get(benchmark_name, benchmark_name.replace('_', ' ').title())
-        ax.set_title(display_name, weight='bold', size=10, pad=10)
-        
-        # Add horizontal line at 1.0 for reference (best possible)
-        ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.8, alpha=0.3, zorder=0)
-    
-    # Hide unused subplots
-    for idx in range(n_benchmarks, len(axes)):
-        axes[idx].axis('off')
-    
-    # Create shared legend
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        # Reorder so Forgetting to Improve appears first in legend
-        try:
-            fti_idx = labels.index('Forgetting to Improve')
-            # Move it to the front
-            handles = [handles[fti_idx]] + handles[:fti_idx] + handles[fti_idx+1:]
-            labels = [labels[fti_idx]] + labels[:fti_idx] + labels[fti_idx+1:]
-        except ValueError:
-            pass  # If not found, keep original order
-        
-        fig.legend(handles, labels, 
-                  loc='upper center',
-                  bbox_to_anchor=(0.5, 0.1),
-                  ncol=3,
-                  frameon=False,
-                  fontsize=9,
-                  columnspacing=1.0,
-                  handlelength=2.0)
-    
-    # Adjust layout
-    plt.tight_layout(rect=[0, 0.06, 1, 0.98])
-    
-    # Save figure
-    if output_folder is None:
-        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures', 'radar_plots')
-    os.makedirs(output_folder, exist_ok=True)
-    
-    output_path = os.path.join(output_folder, 'benchmark_line_profile_comparison.pdf')
-    fig.savefig(output_path, bbox_inches='tight', dpi=300)
-    print(f"Line profile plot saved to {output_path}")
-    plt.close()
-
-
-def plot_bar_comparison(results_folder, output_folder=None):
-    """
-    Create bar plots with dodged/grouped bars comparing different methods across benchmarks.
-    
-    Parameters
-    ----------
-    results_folder : str
-        Path to folder containing results .txt files
-    output_folder : str, optional
-        Path to save output figures. If None, saves to figures/radar_plots/
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.neurips2024()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Method mapping (sequential_joint first to plot first)
-    method_mapping = {
-        'sequential_joint': 'Forgetting to Improve',
-        'none_joint': 'Homoscedastic GP',
-        'targetSampling_joint': 'Target Sampling',
-        'relevance_pursuit_joint': 'Relevance Pursuit',
-        'warped_gp_joint': 'Warped GP',
-        'heteroscedastic_gp_joint': 'Heteroscedastic GP'
-    }
-    
-    # Colors for each method (matching plot_gp.py style)
-    method_colors = {
-        'sequential_joint': '#5F4690',  # Purple for Forgetting to Improve
-        'none_joint': "#1D6996",
-        'targetSampling_joint': "#38A6A5",
-        'relevance_pursuit_joint': "#0F8554",
-        'warped_gp_joint': "#73AF48",
-        'heteroscedastic_gp_joint': "#EDAD08"
-    }
-    
-    # Metrics to plot
-    metrics = ['MSE', 'MAE', 'NLL', 'CE', 'V-ECE', 'Sharpness']
-    
-    # Find all .txt files in the results folder
-    txt_files = []
-    for fname in os.listdir(results_folder):
-        if fname.endswith('.txt'):
-            txt_files.append(os.path.join(results_folder, fname))
-    
-    if not txt_files:
-        print(f"No .txt files found in {results_folder}")
-        return
-    
-    # Parse all files
-    benchmarks = {}
-    for filepath in txt_files:
-        # Extract benchmark name from filename
-        basename = os.path.splitext(os.path.basename(filepath))[0]
-        # e.g., "twitter_fitting_comparison_method_noise_20260128_161421"
-        benchmark_name = basename.split('_fitting_comparison')[0]
-        
-        results = parse_results_file(filepath)
-        if results:
-            benchmarks[benchmark_name] = results
-    
-    if not benchmarks:
-        print("No valid results found in files")
-        return
     
     # Benchmark display name mapping
     benchmark_display_names = {
@@ -838,30 +299,13 @@ def plot_bar_comparison(results_folder, output_folder=None):
     
     # Save figure
     if output_folder is None:
-        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures', 'radar_plots')
+        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
     os.makedirs(output_folder, exist_ok=True)
     
     output_path = os.path.join(output_folder, 'benchmark_bar_comparison.pdf')
     fig.savefig(output_path, bbox_inches='tight', dpi=300)
     print(f"Bar plot saved to {output_path}")
     plt.close()
-
-
-if __name__ == '__main__':
-    # Example usage
-    import sys
-    
-    if len(sys.argv) > 1:
-        results_folder = sys.argv[1]
-    else:
-        # Default to stable_baselines folder
-        script_dir = os.path.dirname(os.path.dirname(__file__))
-        results_folder = os.path.join(script_dir, 'results', 'stable_baselines')
-    
-    print(f"Plotting results from: {results_folder}")
-    plot_radar_comparison(results_folder)
-    plot_line_profile_comparison(results_folder)
-    plot_bar_comparison(results_folder)
 
 
 def _latex_p(p):
@@ -874,7 +318,7 @@ def _latex_p(p):
     return f'p = {mant} \\cdot 10^{{{int(exp)}}}'
 
 
-def plot_noise_ablation_paired(results_folder, benchmarks, metrics=('RMSE', 'NLL'),
+def plot_noise_ablation_paired(benchmarks, metrics=('RMSE', 'NLL'),
                                noise_a='joint', noise_b='aleatoric', output_folder=None,
                                filename='noise_ablation_paired.pdf'):
     """Per-seed paired scatter of two removal criteria (x: noise_a, y: noise_b).
@@ -886,35 +330,33 @@ def plot_noise_ablation_paired(results_folder, benchmarks, metrics=('RMSE', 'NLL
     and the paired Wilcoxon p-value over the differing seeds.
 
     Args:
-        results_folder: Folder with per-seed '<benchmark>_<noise>.json' files
-            ({seed: {metric: value}}).
-        benchmarks: List of (panel title, file stem) pairs.
+        benchmarks: List of (panel title, per-seed results file) pairs; the
+            files are the *_per_seed.json files written next to the tables.
         metrics: Metrics to plot, one row each.
         noise_a, noise_b: The two criteria to compare (x and y axis).
         output_folder: Where to save (defaults to the package figures dir).
         filename: Output file name.
     """
-    import json
     from scipy.stats import wilcoxon
 
     theme = bundles.neurips2024()
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    plt.rcParams.update({"text.usetex": True})
+    plt.rcParams.update({"text.usetex": latex_available()})
     plt.rcParams.update({"legend.frameon": False})
 
     color_diff = "#1D6996"
     color_same = "#B0B0B0"
-    labels = {'joint': 'joint', 'aleatoric': 'aleatoric only', 'aleatoric_scaled': 'aleatoric only'}
+    labels = {'joint': 'joint', 'aleatoric': 'aleatoric only'}
 
     n_rows, n_cols = len(metrics), len(benchmarks)
     figsize = figsizes.neurips2024(nrows=n_rows, ncols=n_cols, height_to_width_ratio=1.0)['figure.figsize']
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
 
-    for col, (title, stem) in enumerate(benchmarks):
-        ra = json.load(open(os.path.join(results_folder, f"{stem}_{noise_a}.json")))
-        rb = json.load(open(os.path.join(results_folder, f"{stem}_{noise_b}.json")))
+    for col, (title, path) in enumerate(benchmarks):
+        variants = json.load(open(path))['variants']
+        ra, rb = variants[noise_a], variants[noise_b]
         seeds = sorted(set(ra) & set(rb), key=int)
         for row, metric in enumerate(metrics):
             ax = axes[row, col]
@@ -966,97 +408,29 @@ def plot_noise_ablation_paired(results_folder, benchmarks, metrics=('RMSE', 'NLL
     plt.close(fig)
 
 
-def _latex_p_short(p):
-    """Compact p-value for narrow panels: 'p = 0.014' or 'p < 10^{-k}'."""
-    if not np.isfinite(p):
-        return 'p = \\mathrm{n/a}'
-    if p >= 1e-3:
-        return f'p = {p:.2g}'
-    return f'p < 10^{{{int(np.ceil(np.log10(p)))}}}'
-
-
-def _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b):
+def _noise_ablation_panels(path, metrics, noise_a, noise_b):
     """Per-seed values for each panel: [(key, label, values_a, values_b)]."""
-    import json
-    ra = json.load(open(os.path.join(results_folder, f"{stem}_{noise_a}.json")))
-    rb = json.load(open(os.path.join(results_folder, f"{stem}_{noise_b}.json")))
+    data = json.load(open(path))
+    num_train_samples = data['num_train_samples']
+    ra, rb = data['variants'][noise_a], data['variants'][noise_b]
     seeds = sorted(set(ra) & set(rb), key=int)
     panels = []
     for m in metrics:
         panels.append((m, m, np.array([ra[s][m] for s in seeds]), np.array([rb[s][m] for s in seeds])))
-    panels.append(('removed', r'\# removed',
+    panels.append(('removed', r'\# removed' if plt.rcParams['text.usetex'] else '# removed',
                    np.array([num_train_samples - ra[s]['n_opt'] for s in seeds], dtype=float),
                    np.array([num_train_samples - rb[s]['n_opt'] for s in seeds], dtype=float)))
     return panels
-
-
-def _draw_noise_bar_panel(ax, label, va, vb, colors, tick_labels):
-    """Two bars: the mean over seeds of each criterion."""
-    means = [va.mean(), vb.mean()]
-    ax.bar([0, 1], means, width=0.7, color=colors, zorder=2)
-    ax.axhline(0, color='black', linewidth=0.6)
-    lo, hi = min(0.0, *means), max(0.0, *means)
-    span = hi - lo
-    ax.set_ylim(lo - (0.1 * span if lo < 0 else 0.0), hi + 0.1 * span)
-
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(tick_labels, rotation=45, ha='right')
-    ax.set_title(label)
-    ax.grid(True, axis='y', alpha=0.3, linewidth=0.5)
-    for spine in ax.spines.values():
-        spine.set_linewidth(0.8)
 
 
 def _apply_noise_ablation_style(rel_width):
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(bundles.neurips2024(rel_width=rel_width))
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    plt.rcParams.update({"text.usetex": True})
+    plt.rcParams.update({"text.usetex": latex_available()})
 
 
-_NOISE_COLORS = ("#1D6996", "#94346E")
-_NOISE_NAMES = {'joint': 'joint', 'aleatoric': 'aleatoric', 'aleatoric_scaled': 'aleatoric'}
-
-
-def plot_noise_ablation_bars(results_folder, stem, num_train_samples, title=None,
-                             metrics=('RMSE', 'NLL'), noise_a='joint', noise_b='aleatoric',
-                             output_folder=None, filename=None):
-    """Bar plot (mean over seeds) comparing two removal criteria on one
-    benchmark: one panel per metric plus one for the number of removed
-    samples, two bars each.
-
-    Args:
-        results_folder: Folder with per-seed '<stem>_<noise>.json' files
-            ({seed: {metric: value, 'n_opt': retained samples}}).
-        stem: Benchmark file stem.
-        num_train_samples: Initial training-set size (removed = this - n_opt).
-        title: Figure title.
-        metrics: Metrics to plot (lower is better).
-        noise_a, noise_b: The two criteria to compare.
-        output_folder: Where to save (defaults to the package figures dir).
-        filename: Output file name (default 'noise_ablation_bars_<stem>.pdf').
-    """
-    _apply_noise_ablation_style(0.5)
-    panels = _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b)
-    figsize = figsizes.neurips2024(rel_width=0.5, nrows=1, ncols=len(panels),
-                                   height_to_width_ratio=1.6)['figure.figsize']
-    fig, axes = plt.subplots(1, len(panels), figsize=figsize)
-    for ax, (_, label, va, vb) in zip(np.atleast_1d(axes), panels):
-        _draw_noise_bar_panel(ax, label, va, vb, _NOISE_COLORS,
-                              [_NOISE_NAMES[noise_a], _NOISE_NAMES[noise_b]])
-    if title:
-        fig.suptitle(title)
-
-    if output_folder is None:
-        output_folder = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(output_folder, exist_ok=True)
-    filepath = os.path.join(output_folder, filename or f"noise_ablation_bars_{stem}.pdf")
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    print(f"Noise ablation bar plot saved to {filepath}")
-    plt.close(fig)
-
-
-def plot_noise_ablation_bars_grid(results_folder, benchmarks, metrics=('RMSE', 'NLL'),
+def plot_noise_ablation_bars_grid(benchmarks, metrics=('RMSE', 'NLL'),
                                   noise_a='joint', noise_b='aleatoric', output_folder=None,
                                   filename='noise_ablation_bars.pdf'):
     """Joint vs aleatoric-only removal criterion, one titled subfigure per
@@ -1067,9 +441,9 @@ def plot_noise_ablation_bars_grid(results_folder, benchmarks, metrics=('RMSE', '
     (Forgetting-to-Improve purple for joint) with one shared legend.
 
     Args:
-        results_folder: Folder with per-seed '<stem>_<noise>.json' files.
-        benchmarks: List of (title, stem, num_train_samples), left to right.
-        metrics, noise_a, noise_b: As in plot_noise_ablation_bars.
+        benchmarks: List of (title, per-seed results file), left to right.
+        metrics: Metrics to plot (lower is better).
+        noise_a, noise_b: The two criteria (variant names in the per-seed file).
         output_folder: Where to save (defaults to the package figures dir).
         filename: Output file name.
     """
@@ -1085,8 +459,8 @@ def plot_noise_ablation_bars_grid(results_folder, benchmarks, metrics=('RMSE', '
                                    height_to_width_ratio=1.4)['figure.figsize']
     fig = plt.figure(figsize=figsize)
     subfigs = np.atleast_1d(fig.subfigures(1, len(benchmarks), wspace=0.12))
-    for subfig, (title, stem, num_train_samples) in zip(subfigs, benchmarks):
-        panels = _noise_ablation_panels(results_folder, stem, num_train_samples, metrics, noise_a, noise_b)
+    for subfig, (title, path) in zip(subfigs, benchmarks):
+        panels = _noise_ablation_panels(path, metrics, noise_a, noise_b)
         axes = np.atleast_1d(subfig.subplots(1, n_panels))
         for ax, (_, label, va, vb) in zip(axes, panels):
             means = [va.mean(), vb.mean()]

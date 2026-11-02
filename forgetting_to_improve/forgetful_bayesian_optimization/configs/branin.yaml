@@ -9,10 +9,9 @@ bayes_opt:
     kappa: 2.576
   save_results: true
   plot_results: true
-  results_path: botorch_branin_statistical.txt
+  results_path: ucb/botorch_branin_statistical.txt
   sample_optimization:
-    # algorithm: [none, joint, target_region, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
-    algorithm: [target_region] #, warped_gp, relevance_pursuit]
+    algorithm: [none, joint, warped_gp, relevance_pursuit, trimmed_mll, student_t, target_region]
     method: sequential 
     min_samples: 5
   kernel:

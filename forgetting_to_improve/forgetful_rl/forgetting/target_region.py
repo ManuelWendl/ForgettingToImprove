@@ -130,17 +130,6 @@ class TargetRegion:
         all_data = self.replay_buffer.get_all()
         return all_data.obs[self.target_region_mask]
     
-    def get_target_region_data(self):
-        """
-        Get all transition data (states, actions, next_states, rewards, dones)
-        for transitions in the target region.
-        
-        Returns:
-            TransitionBatch containing only target region data
-        """
-        all_data = self.replay_buffer.get_all()
-        return all_data[self.target_region_mask]
-    
     def get_target_region_ratio(self) -> float:
         """
         Get the fraction of replay buffer that is in the target region.
@@ -149,10 +138,6 @@ class TargetRegion:
             Ratio of target region size to total buffer size
         """
         return np.mean(self.target_region_mask)
-    
-    def get_threshold(self) -> float:
-        """Get the threshold value defining the target region."""
-        return self.threshold_value
     
     def get_statistics(self) -> dict:
         """

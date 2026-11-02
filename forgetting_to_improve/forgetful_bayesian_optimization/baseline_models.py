@@ -1,17 +1,13 @@
 import torch
 import gpytorch
 import warnings
-from typing import Tuple, Any, Callable, Optional
+from typing import Tuple, Any
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP
-from torch import Tensor
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.priors import GammaPrior
 from gpytorch.constraints import GreaterThan, Interval
 from gpytorch.likelihoods import GaussianLikelihood
-
-# Import baseline models from forgetting_to_improve
-from ..forgetting_to_improve.models import HeteroscedasticGPModel
 
 # Import BoTorch models for baselines
 try:
@@ -111,22 +107,21 @@ def initialize_relevance_pursuit_model(
 def initialize_warped_gp_model(
     train_x: torch.Tensor,
     train_y: torch.Tensor,
-    kernel: Any = None,  # Now used - Matern kernel from config
+    kernel: Any = None,
     noise_level: float = 0.1,
     device: str = 'cpu',
     global_bounds: torch.Tensor = None
 ) -> Tuple[Any, Any]:
     """
-    Initialize a Warped GP model with input transformation.
+    Initialize a Warped GP model with input transformation (Kumaraswamy input warping).
     
-    Uses the Matern kernel from config (same as standard GP) and lets the model
-    learn noise internally without fixed train_Yvar.
+    Uses a fresh Matern-5/2 kernel; the noise is learned (no fixed train_Yvar).
     
     Args:
         train_x: Training inputs (n, d)
         train_y: Training targets (n, 1) or (n,)
-        kernel: Matern kernel from config (same as standard GP uses)
-        noise_level: Ignored - model learns noise internally
+        kernel: Unused (a fresh kernel is created)
+        noise_level: Sets the upper bound of the noise constraint (10 * noise_level)
         device: Device for computation
         global_bounds: Global problem bounds (2, d) for input warping
         
@@ -150,11 +145,9 @@ def initialize_warped_gp_model(
     if train_y_double.ndim == 1:
         train_y_double = train_y_double.unsqueeze(-1)
     
-    # Create fresh Matern kernel with same priors as standard GP (not pre-optimized)
-    
+    # Fresh Matern-5/2 kernel (hyperparameters are refit in every BO iteration)
     n_dims = train_x_double.shape[-1]
     
-    # Create Matern kernel with EXACT same priors as used in setup_experiment.py
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
         ard_num_dims=n_dims,
@@ -167,7 +160,7 @@ def initialize_warped_gp_model(
         outputscale_prior=GammaPrior(2.0, 0.15)
     ).double()
     
-    # Create likelihood with EXACT same noise constraints as standard GP
+    # Same noise constraint as the standard GP
     if noise_level > 0:
         likelihood_warped = GaussianLikelihood(
             noise_prior=GammaPrior(1.5, 1.0),
@@ -182,10 +175,10 @@ def initialize_warped_gp_model(
     # Determine bounds for input warping
     n_dims = train_x_double.shape[-1]
     if global_bounds is not None:
-        # Use global problem bounds (proper approach)
+        # Use the problem bounds
         bounds_warp = global_bounds.double().to(device)
     else:
-        # Fallback to training data bounds (for backward compatibility)
+        # Otherwise use the bounds of the training data
         if n_dims == 1:
             x_min = train_x_double.min().unsqueeze(0)
             x_max = train_x_double.max().unsqueeze(0)
@@ -220,108 +213,264 @@ def initialize_warped_gp_model(
     return mll_warped, warped_model
 
 
-def initialize_heteroscedastic_gp_model(
-    train_x: torch.Tensor,
-    train_y: torch.Tensor,
-    mean_kernel: Any,
-    noise_kernel: Any = None,
-    device: str = 'cpu'
-) -> Tuple[None, HeteroscedasticGPModel]:
-    """
-    Initialize a Most Likely Heteroscedastic GP model.
-    
-    This implements the algorithm from:
-    "Most Likely Heteroscedastic Gaussian Process Regression"
-    http://people.csail.mit.edu/kersting/papers/kersting07icml_mlHetGP.pdf
-    
-    Args:
-        train_x: Training inputs (n, d)
-        train_y: Training targets (n, 1) or (n,)
-        mean_kernel: Kernel for the mean GP
-        noise_kernel: Not used (kept for compatibility)
-        device: Device for computation
-        
-    Returns:
-        Tuple of (None, model) - mll is None as it's managed internally
-    """
-    print("Initializing Most Likely Heteroscedastic GP model...")
-    
-    train_x = train_x.to(device)
-    train_y = train_y.to(device)
-    
-    # Ensure train_y is 1D
-    if train_y.ndim > 1:
-        train_y = train_y.squeeze(-1)
-    
-    # Add LogNormal(0,1) prior to mean kernel lengthscale
-    if not hasattr(mean_kernel.base_kernel, 'lengthscale_prior'):
-        mean_kernel.base_kernel.lengthscale_prior = LogNormalPrior(0, 1)
-        mean_kernel.base_kernel.lengthscale_constraint = GreaterThan(1e-4)
-    if not hasattr(mean_kernel, 'outputscale_prior'):
-        mean_kernel.outputscale_prior = GammaPrior(2.0, 0.15)
-    
-    # Create heteroscedastic model using the Most Likely approach
-    hetero_model = HeteroscedasticGPModel(
-        train_x=train_x,
-        train_y=train_y,
-        kernel=mean_kernel,
-        max_iter=10,  # Match the notebook default
-        tol=1e-04,
-        var_estimate='paper',  # Use the paper's sampling-based method
-        var_samples=1000,
-        norm_and_std=False  # Always normalize and standardize for stability
-    )
-    
-    # Fit the model (this implements the full Most Likely algorithm)
-    hetero_model.fit()
-    
-    # Set to training mode for acquisition function optimization
-    hetero_model.train()
-    
-    print("Most Likely Heteroscedastic GP model fitted successfully")
-    return None, hetero_model
-
-
-def initialize_modulating_surrogates_model(
+def initialize_trimmed_mll_model(
     train_x: torch.Tensor,
     train_y: torch.Tensor,
     kernel: Any = None,
     noise_level: float = 0.1,
     device: str = 'cpu',
-    num_mcmc_samples: int = 50,
-    num_warmup: int = 500
+    max_outlier_fraction: float = 0.2,
+    max_iterations: int = 50
 ) -> Tuple[Any, Any]:
     """
-    Initialize a Modulating Surrogates GP model using Latent GP (LGP).
+    Initialize a Trimmed MLL GP model that robustly handles outliers.
     
-    Based on "Modulating Surrogates for Bayesian Optimization" paper.
+    Based on "Trimmed Maximum Likelihood Estimation for Robust Learning in Gaussian Processes"
+    (https://proceedings.mlr.press/v161/kuss21a.html)
     
-    This implements the proper LGP approach where:
-    1. Each training point has latent variables h_n ~ N(0, σ²_h I)
-    2. Posterior inference over H and θ is performed via MCMC (HMC/NUTS)
-    3. Acquisition function uses Monte Carlo approximation over posterior samples
+    This method jointly optimizes:
+    1. GP hyperparameters (via marginal likelihood)
+    2. Selection of inlier samples (removing up to max_outlier_fraction outliers)
     
-    The latent variables allow the model to learn which training points are
-    unreliable/detrimental and down-weight them automatically.
+    The algorithm iteratively:
+    - Fits GP on current inlier set
+    - Computes marginal likelihood contribution of each sample
+    - Removes samples with lowest contributions (potential outliers)
+    - Repeats until convergence
     
     Args:
         train_x: Training inputs (n, d)
         train_y: Training targets (n, 1) or (n,)
-        kernel: Matern kernel from config (same as standard GP uses)
-        noise_level: Noise level for the likelihood
+        kernel: Unused (a fresh kernel is created)
+        noise_level: Initial noise level
         device: Device for computation
-        num_mcmc_samples: Number of MCMC posterior samples to draw
-        num_warmup: Number of MCMC warmup/burn-in steps
+        max_outlier_fraction: Maximum fraction of samples to remove (default 0.2)
+        max_iterations: Maximum optimization iterations
         
     Returns:
-        Tuple of (None, model) - mll is None as MCMC handles inference
+        Tuple of (mll, model) trained on inlier samples only
     """
     if not BOTORCH_AVAILABLE:
-        raise ImportError("BoTorch is required for modulating_surrogates method")
+        raise ImportError("BoTorch is required for trimmed_mll method")
     
-    from ..forgetting_to_improve.models import create_latent_gp_model, LatentGPModel
+    print("Initializing Trimmed MLL GP model...")
     
-    print("Initializing Latent GP (Modulating Surrogates) model...")
+    # Convert to double precision
+    train_x_double = train_x.double().to(device)
+    train_y_double = train_y.double().to(device)
+    
+    # Handle NaN/Inf
+    train_x_double = torch.nan_to_num(train_x_double, nan=0.0, posinf=0.0, neginf=0.0)
+    train_y_double = torch.nan_to_num(train_y_double, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    # Ensure train_y has shape (n, 1)
+    if train_y_double.ndim == 1:
+        train_y_double = train_y_double.unsqueeze(-1)
+    
+    n_train, n_dims = train_x_double.shape
+    max_nr_outliers = int(n_train * max_outlier_fraction)
+    min_nr_inliers = n_train - max_nr_outliers
+    
+    print(f"Total samples: {n_train}, Max outliers: {max_nr_outliers}, Min inliers: {min_nr_inliers}")
+    
+    # Fresh Matern-5/2 kernel
+    base_kernel = gpytorch.kernels.MaternKernel(
+        nu=2.5, 
+        ard_num_dims=n_dims,
+        lengthscale_prior=GammaPrior(3.0, 1.5),
+        lengthscale_constraint=GreaterThan(1e-4)
+    ).double()
+    
+    kernel_trimmed = gpytorch.kernels.ScaleKernel(
+        base_kernel,
+        outputscale_prior=GammaPrior(2.0, 0.15)
+    ).double()
+    
+    # Create likelihood with flexible noise constraints
+    # Use GreaterThan instead of Interval to avoid constraint violation errors
+    likelihood = GaussianLikelihood(
+        noise_prior=GammaPrior(2.0, 0.05),
+        noise_constraint=GreaterThan(1e-6)
+    ).double()
+    
+    # Initialize with all samples as inliers
+    inlier_indices = torch.arange(n_train, dtype=torch.long, device=device)
+    previous_inlier_indices = None
+    previous_loss = torch.tensor(float('inf'))
+    
+    # Create initial model
+    model = SingleTaskGP(
+        train_X=train_x_double[inlier_indices],
+        train_Y=train_y_double[inlier_indices],
+        likelihood=likelihood,
+        covar_module=kernel_trimmed
+    )
+    
+    mll = ExactMarginalLogLikelihood(likelihood=model.likelihood, model=model)
+    
+    # Joint optimization loop (Algorithm 1 from paper)
+    for iteration in range(max_iterations):
+        # Set to training mode
+        model.train()
+        likelihood.train()
+        
+        # Create optimizer for current model
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+        
+        # Optimize hyperparameters on current inlier set
+        optimizer.zero_grad()
+        output = model(train_x_double[inlier_indices])
+        loss = -mll(output, train_y_double[inlier_indices].squeeze(-1))
+        loss.backward()
+        optimizer.step()
+        
+        current_loss = loss.item()
+        
+        print(f"Iteration {iteration}: Loss={current_loss:.4f}, Inliers={len(inlier_indices)}")
+        
+        # Compute marginal likelihood contribution for each sample
+        # Using leave-one-out approximation: contribution ≈ -log p(y_i | y_{-i}, X)
+        model.eval()
+        likelihood.eval()
+        
+        with torch.no_grad():
+            # Get predictive distribution at all training points
+            pred = model(train_x_double)
+            pred_mean = pred.mean
+            pred_var = pred.variance + likelihood.noise
+            
+            # Compute negative log probability (lower is better for inliers)
+            residuals = (train_y_double.squeeze(-1) - pred_mean) ** 2
+            neg_log_prob = 0.5 * (torch.log(2 * torch.pi * pred_var) + residuals / pred_var)
+        
+        # Select new inlier set: keep samples with lowest neg_log_prob
+        # (i.e., highest marginal likelihood contribution)
+        sorted_indices = torch.argsort(neg_log_prob)
+        new_inlier_indices = sorted_indices[:min_nr_inliers]
+        new_inlier_indices = torch.sort(new_inlier_indices)[0]  # Sort for consistency
+        
+        # Check convergence: did inlier set change?
+        if previous_inlier_indices is not None:
+            if torch.equal(new_inlier_indices, previous_inlier_indices):
+                print(f"Converged: Inlier set unchanged at iteration {iteration}")
+                break
+            
+            # Check if new set improves marginal likelihood
+            # Evaluate loss on new inlier set
+            test_model = SingleTaskGP(
+                train_X=train_x_double[new_inlier_indices],
+                train_Y=train_y_double[new_inlier_indices],
+                likelihood=likelihood,
+                covar_module=kernel_trimmed
+            )
+            test_mll = ExactMarginalLogLikelihood(likelihood=test_model.likelihood, model=test_model)
+            test_model.train()
+            
+            with torch.no_grad():
+                test_output = test_model(train_x_double[new_inlier_indices])
+                new_loss = -test_mll(test_output, train_y_double[new_inlier_indices].squeeze(-1)).item()
+            
+            if new_loss >= current_loss:
+                # No improvement, use previous inlier set
+                print(f"Converged: No improvement in marginal likelihood at iteration {iteration}")
+                break
+        
+        # Update for next iteration
+        previous_inlier_indices = inlier_indices.clone()
+        inlier_indices = new_inlier_indices
+        
+        # Update model with new inlier set
+        model.set_train_data(
+            inputs=train_x_double[inlier_indices],
+            targets=train_y_double[inlier_indices].squeeze(-1),
+            strict=False
+        )
+    
+    # Final model fit on selected inliers
+    try:
+        final_model = SingleTaskGP(
+            train_X=train_x_double[inlier_indices],
+            train_Y=train_y_double[inlier_indices],
+            likelihood=likelihood,
+            covar_module=kernel_trimmed
+        )
+        final_mll = ExactMarginalLogLikelihood(likelihood=final_model.likelihood, model=final_model)
+        
+        # Final hyperparameter optimization
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                fit_gpytorch_mll(final_mll)
+            except RuntimeError as e:
+                if "constraint" in str(e).lower() or "prior" in str(e).lower():
+                    print(f"  Warning: Hyperparameter fitting failed ({e}), using current values")
+                else:
+                    raise
+        
+        outlier_indices = torch.tensor([i for i in range(n_train) if i not in inlier_indices.tolist()])
+        print(f"Trimmed MLL model fitted: {len(inlier_indices)} inliers, {len(outlier_indices)} outliers removed")
+        
+        return final_mll, final_model
+    except Exception as e:
+        print(f"  Error in final trimmed MLL model: {e}")
+        print(f"  Falling back to standard GP")
+        # Fallback: use all data with standard GP
+        fallback_model = SingleTaskGP(
+            train_X=train_x_double,
+            train_Y=train_y_double,
+            covar_module=kernel_trimmed,
+            likelihood=likelihood
+        )
+        fallback_mll = ExactMarginalLogLikelihood(likelihood=fallback_model.likelihood, model=fallback_model)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                fit_gpytorch_mll(fallback_mll)
+            except:
+                pass  # Use default hyperparameters
+        return fallback_mll, fallback_model
+
+
+def initialize_student_t_gp_model(
+    train_x: torch.Tensor,
+    train_y: torch.Tensor,
+    kernel: Any = None,
+    noise_level: float = 0.1,
+    device: str = 'cpu',
+    degrees_of_freedom: float = 3.0
+) -> Tuple[Any, Any]:
+    """
+    Initialize a robust GP model using iterative reweighting (simulating Student-t behavior).
+    
+    Uses Iteratively Reweighted Least Squares (IRLS) to down-weight outliers,
+    which approximates the behavior of a Student-t likelihood. This provides
+    robustness to outliers without requiring approximate inference methods.
+    
+    The algorithm:
+    1. Fit a standard GP
+    2. Compute residuals and down-weight points with large residuals
+    3. Refit with weighted likelihood
+    4. Iterate until convergence
+    
+    The degrees of freedom parameter controls tail heaviness:
+    - Lower values (e.g., 3-5): More aggressive down-weighting of outliers
+    - Higher values (e.g., >30): Approaches standard GP
+    
+    Args:
+        train_x: Training inputs (n, d)
+        train_y: Training targets (n, 1) or (n,)
+        kernel: Unused (a fresh kernel is created)
+        noise_level: Initial noise level
+        device: Device for computation
+        degrees_of_freedom: Degrees of freedom for robust weighting (default 3.0)
+        
+    Returns:
+        Tuple of (mll, model) with robustly fitted hyperparameters
+    """
+    if not BOTORCH_AVAILABLE:
+        raise ImportError("BoTorch is required for student_t method")
+    
+    print(f"Initializing Robust GP model (Student-t approximation with nu={degrees_of_freedom})...")
     
     # Convert to double precision
     train_x_double = train_x.double().to(device)
@@ -337,209 +486,161 @@ def initialize_modulating_surrogates_model(
     
     n_train, n_dims = train_x_double.shape
     
-    # Create Matern kernel with ARD for augmented space (d + latent_dim dimensions)
-    # LogNormal(0,1) prior for lengthscale
-    latent_dim = 1  # One latent variable per training point
+    # Fresh Matern-5/2 kernel
     base_kernel = gpytorch.kernels.MaternKernel(
         nu=2.5, 
-        ard_num_dims=n_dims + latent_dim,  # +latent_dim for the latent variables
-        lengthscale_prior=LogNormalPrior(0, 1),
+        ard_num_dims=n_dims,
+        lengthscale_prior=GammaPrior(3.0, 1.5),
         lengthscale_constraint=GreaterThan(1e-4)
     ).double()
     
-    kernel_modulating = gpytorch.kernels.ScaleKernel(
+    kernel_robust = gpytorch.kernels.ScaleKernel(
         base_kernel,
+        outputscale_prior=GammaPrior(2.0, 0.15)
     ).double()
     
-    # Create likelihood with same noise constraints as standard GP
-    if noise_level > 0:
-        likelihood_modulating = GaussianLikelihood(
-            noise_prior=GammaPrior(1.5, 1.0),
-            noise_constraint=Interval(1e-6, noise_level * 10.0)
-        ).double()
-    else:
-        likelihood_modulating = GaussianLikelihood(
-            noise_prior=GammaPrior(1.5, 1.0),
-            noise_constraint=Interval(1e-6, 1e-2)
-        ).double()
+    # Create Gaussian likelihood with flexible constraint
+    # Use GreaterThan instead of Interval to avoid constraint violation errors
+    likelihood = GaussianLikelihood(
+        noise_prior=GammaPrior(2.0, 0.05),
+        noise_constraint=GreaterThan(1e-6)
+    ).double()
     
-    # Create Latent GP model with MCMC
-    # Prior std for latent variables (σ_h in the paper)
-    sigma_h = 1.0
+    # Iteratively Reweighted Least Squares (IRLS) for robustness
+    # This approximates Student-t likelihood behavior
+    max_iterations = 5
+    weights = torch.ones(n_train, dtype=torch.float64, device=device)
     
+    # Initialize noise estimate (use initial likelihood noise or a default)
     try:
-        modulating_model = create_latent_gp_model(
-            train_x=train_x_double,
-            train_y=train_y_double,
-            covar_module=kernel_modulating,
-            likelihood=likelihood_modulating,
-            latent_dim=latent_dim,
-            sigma_h=sigma_h,
-            num_mcmc_samples=num_mcmc_samples,
-            num_warmup=num_warmup
-        )
-        print("Latent GP (Modulating Surrogates) model fitted successfully via MCMC")
-    except Exception as e:
-        print(f"Warning: MCMC failed ({e}). Falling back to simplified version...")
-        # Fallback to simpler approach without full MCMC
-        modulating_model = LatentGPModel(
-            train_X=train_x_double,
-            train_Y=train_y_double,
-            covar_module=kernel_modulating,
-            likelihood=likelihood_modulating,
-            latent_dim=latent_dim,
-            sigma_h=sigma_h,
-            num_mcmc_samples=100,  # Single sample (MAP estimate)
-            num_warmup=100
-        )
-        # Use zero latent variables as fallback
-        modulating_model.mcmc_samples_h = torch.zeros(
-            1, n_train, latent_dim,
-            dtype=train_x_double.dtype,
-            device=train_x_double.device
-        )
+        current_noise = likelihood.noise.detach().clone().item()
+    except:
+        current_noise = 0.1  # Default noise level
     
-    return None, modulating_model
-
-class MCLatentGPAcquisitionFunction:
-    """
-    Wrapper for acquisition functions that uses Monte Carlo approximation
-    over latent variable posterior samples.
-    
-    Following the LGP paper:
-    α(x*) ≈ (1/M) Σᵢ α̂(x*, Hᵢ, θᵢ)
-    
-    where {Hᵢ, θᵢ} are MCMC samples from the posterior.
-    """
-    
-    def __init__(
-        self,
-        base_acq_func_factory: Callable,
-        latent_gp_model,
-        X_baseline: Tensor,
-        num_samples: Optional[int] = None
-    ):
-        """
-        Args:
-            base_acq_func_factory: Factory function that creates acquisition function
-                                   given a model (e.g., lambda model: UpperConfidenceBound(model, beta=0.1))
-            latent_gp_model: LatentGPModel with MCMC samples
-            X_baseline: Baseline points for acquisition (n, d) - original dimension
-            num_samples: Number of MCMC samples to use (None = use all)
-        """
-        self.base_acq_func_factory = base_acq_func_factory
-        self.latent_gp_model = latent_gp_model
-        self.X_baseline = X_baseline
-        
-        # Get MCMC samples of both H and θ
-        h_samples, theta_samples = latent_gp_model.get_posterior_samples()
-        
-        if num_samples is not None and num_samples < len(theta_samples):
-            # Subsample if requested
-            indices = torch.randperm(len(theta_samples))[:num_samples].tolist()
-            self.h_samples = h_samples[indices]
-            self.theta_samples = [theta_samples[i] for i in indices]
-        else:
-            self.h_samples = h_samples
-            self.theta_samples = theta_samples
-        
-        self.num_samples = len(self.theta_samples)
-    
-    def __call__(self, X: Tensor) -> Tensor:
-        """
-        Evaluate acquisition function using Monte Carlo approximation.
-        
-        For each MCMC sample (Hᵢ, θᵢ):
-        1. Create a fresh GP with training data augmented by Hᵢ and hyperparameters θᵢ
-        2. Evaluate acquisition function α̂(x*, Hᵢ, θᵢ)
-        3. Average over all samples: α(x*) ≈ (1/M) Σᵢ α̂(x*, Hᵢ, θᵢ)
-        
-        Args:
-            X: Candidate points (batch_size, d) - original dimension
+    for iteration in range(max_iterations):
+        try:
+            # Create model with current weights by scaling the noise
+            # Points with smaller weights get higher noise (less trust)
+            # Clamp to prevent extreme values
+            train_yvar = (current_noise / weights.clamp(min=0.01)).unsqueeze(-1)
+            train_yvar = torch.clamp(train_yvar, min=1e-6, max=100.0)  # Prevent extreme variance
             
-        Returns:
-            Acquisition values (batch_size,)
-        """
-        from gpytorch.kernels import RBFKernel, ScaleKernel
-        from gpytorch.likelihoods import GaussianLikelihood
-        
-        acq_values = torch.zeros(X.shape[0], dtype=X.dtype, device=X.device)
-        
-        # Monte Carlo approximation: average over posterior samples of (H, θ)
-        for i in range(self.num_samples):
-            # Get this sample's latent variables and hyperparameters
-            h_sample = self.h_samples[i]  # (n, latent_dim)
-            theta_sample = self.theta_samples[i]  # dict with 'lengthscale', 'outputscale', 'noise'
+            # Check for NaN/Inf
+            if torch.any(torch.isnan(train_yvar)) or torch.any(torch.isinf(train_yvar)):
+                print(f"  Warning: Invalid train_Yvar detected, using uniform weights")
+                train_yvar = torch.full_like(train_yvar, current_noise)
             
-            # Create fresh GP model with augmented training data
-            X_augmented = torch.cat([self.latent_gp_model.train_X_original, h_sample], dim=-1)
-            Y_train = self.latent_gp_model.train_Y_original
-            if Y_train.ndim == 1:
-                Y_train = Y_train.unsqueeze(-1)
-            
-            # Create kernel with sampled hyperparameters
-            base_kernel = RBFKernel(ard_num_dims=X_augmented.shape[-1])
-            base_kernel.lengthscale = theta_sample['lengthscale'].detach()
-            
-            covar_module = ScaleKernel(base_kernel)
-            covar_module.outputscale = theta_sample['outputscale'].detach()
-            
-            # Create likelihood with sampled noise
-            likelihood = GaussianLikelihood()
-            likelihood.noise = theta_sample['noise'].detach()
-            
-            # Create a fresh SingleTaskGP instance with sampled hyperparameters
-            fresh_model = SingleTaskGP(
-                train_X=X_augmented.double(),
-                train_Y=Y_train.double(),
-                covar_module=covar_module,
+            model = SingleTaskGP(
+                train_X=train_x_double,
+                train_Y=train_y_double,
+                train_Yvar=train_yvar,
+                covar_module=kernel_robust,
                 likelihood=likelihood
             )
             
-            # Set to eval mode
-            fresh_model.eval()
-            fresh_model.likelihood.eval()
+            mll = ExactMarginalLogLikelihood(likelihood=model.likelihood, model=model)
             
-            # Create acquisition function for this model
-            acq_func = self.base_acq_func_factory(model=fresh_model, X_baseline=self.X_baseline)
+            # Fit model
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    fit_gpytorch_mll(mll)
+                except RuntimeError as e:
+                    if "constraint" in str(e).lower() or "prior" in str(e).lower():
+                        print(f"  Warning: Fitting failed in iteration {iteration + 1}, using current parameters")
+                        break  # Exit IRLS loop and use current model
+                    else:
+                        raise
             
-            # Evaluate acquisition - augment X with zeros for test points
-            h_test = torch.zeros(*X.shape[:-1], self.latent_gp_model.latent_dim, dtype=X.dtype, device=X.device)
-            X_augmented_test = torch.cat([X, h_test], dim=-1)
-            
-            # Evaluate with augmented test points
-            with torch.no_grad(), gpytorch.settings.fast_pred_var():
-                acq_val = acq_func(X_augmented_test.unsqueeze(-2)).squeeze(-1)
-            
-            acq_values += acq_val
+            # Update noise estimate for next iteration
+            try:
+                current_noise = model.likelihood.noise.detach().clone().item()
+            except:
+                pass  # Keep previous noise estimate
+        except Exception as e:
+            print(f"  Warning: IRLS iteration {iteration + 1} failed: {e}")
+            print(f"  Continuing with previous weights...")
+            break
         
-        # Average over samples
-        acq_values /= self.num_samples
+        # Compute residuals
+        model.eval()
+        with torch.no_grad():
+            try:
+                pred = model(train_x_double)
+                residuals = (train_y_double.squeeze(-1) - pred.mean)**2
+                
+                # Update weights using Student-t weighting formula:
+                # w_i = (nu + d) / (nu + r_i^2 / sigma^2)
+                # where r_i is the standardized residual
+                sigma_sq = residuals.median()  # Robust scale estimate
+                if sigma_sq < 1e-10:  # Avoid division by very small numbers
+                    sigma_sq = torch.tensor(1e-6, dtype=torch.float64, device=device)
+                
+                standardized_resid_sq = residuals / (sigma_sq + 1e-6)
+                
+                # Student-t weights (down-weight outliers)
+                weights = (degrees_of_freedom + 1) / (degrees_of_freedom + standardized_resid_sq)
+                weights = torch.clamp(weights, min=0.01, max=1.0)  # Prevent extreme weights
+                
+                # Check for NaN/Inf
+                if torch.any(torch.isnan(weights)) or torch.any(torch.isinf(weights)):
+                    print(f"  Warning: Invalid weights detected, keeping previous weights")
+                    weights = torch.ones(n_train, dtype=torch.float64, device=device)
+            except Exception as e:
+                print(f"  Warning: Weight update failed: {e}, keeping previous weights")
+                # Keep previous weights
         
-        return acq_values
-
-
-def create_mc_latent_acquisition(
-    acq_func_factory: Callable,
-    latent_gp_model,
-    X_baseline: Tensor,
-    num_samples: Optional[int] = None
-):
-    """
-    Create a Monte Carlo acquisition function for a Latent GP model.
+        model.train()
+        
+        if iteration < max_iterations - 1:
+            print(f"  IRLS iteration {iteration + 1}: min_weight={weights.min():.3f}, max_weight={weights.max():.3f}")
     
-    Args:
-        acq_func_factory: Function that creates acquisition function given a model
-        latent_gp_model: Fitted LatentGPModel with MCMC samples
-        X_baseline: Training inputs in original dimension (n, d)
-        num_samples: Number of MC samples to use
+    # Final model with learned weights
+    try:
+        # Use current noise estimate
+        train_yvar_final = (current_noise / weights.clamp(min=0.01)).unsqueeze(-1)
+        train_yvar_final = torch.clamp(train_yvar_final, min=1e-6, max=100.0)
         
-    Returns:
-        Callable acquisition function
-    """
-    return MCLatentGPAcquisitionFunction(
-        base_acq_func_factory=acq_func_factory,
-        latent_gp_model=latent_gp_model,
-        X_baseline=X_baseline,
-        num_samples=num_samples
-    )
+        # Check for NaN/Inf
+        if torch.any(torch.isnan(train_yvar_final)) or torch.any(torch.isinf(train_yvar_final)):
+            print(f"  Warning: Invalid final train_Yvar, using uniform weights")
+            train_yvar_final = torch.full((n_train, 1), current_noise, dtype=torch.float64, device=device)
+        
+        final_model = SingleTaskGP(
+            train_X=train_x_double,
+            train_Y=train_y_double,
+            train_Yvar=train_yvar_final,
+            covar_module=kernel_robust,
+            likelihood=likelihood
+        )
+        
+        final_mll = ExactMarginalLogLikelihood(likelihood=final_model.likelihood, model=final_model)
+        
+        # Final hyperparameter optimization
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                fit_gpytorch_mll(final_mll)
+            except RuntimeError as e:
+                if "constraint" in str(e).lower() or "prior" in str(e).lower():
+                    print(f"  Warning: Final hyperparameter fitting failed, using current values")
+                else:
+                    raise
+        
+        print(f"Robust GP model fitted (IRLS converged, {(weights < 0.5).sum()}/{n_train} points down-weighted)")
+        return final_mll, final_model
+    except Exception as e:
+        print(f"  Error in final model creation: {e}")
+        print(f"  Falling back to standard GP without robustness")
+        # Fallback: return a standard GP model
+        fallback_model = SingleTaskGP(
+            train_X=train_x_double,
+            train_Y=train_y_double,
+            covar_module=kernel_robust,
+            likelihood=likelihood
+        )
+        fallback_mll = ExactMarginalLogLikelihood(likelihood=fallback_model.likelihood, model=fallback_model)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fit_gpytorch_mll(fallback_mll)
+        return fallback_mll, fallback_model

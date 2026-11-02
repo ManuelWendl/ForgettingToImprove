@@ -6,7 +6,6 @@ import time
 from typing import Tuple, Optional, List, Union, Callable
 from gpytorch.priors import GammaPrior
 from gpytorch.constraints import Interval
-from .helper.plot_gp import plot_predictions, plot_curvature_bounds
 from .helper.error import calculate_prediction_errors
 from .helper.kernel_factory import create_kernel_from_config
 from .helper.data_loader import load_dataset
@@ -17,61 +16,24 @@ from .optimize import (
     batch_optimize_samples,
 )
 
-# Noise-prior scaling for the GaussianLikelihood built in the default ('none',
-# 'sequential', 'batch', 'targetSampling') path: GammaPrior(NOISE_PRIOR_CONCENTRATION,
-# NOISE_PRIOR_CONCENTRATION / target_mean), where target_mean = NOISE_PRIOR_MEAN_MULTIPLIER
-# * var(y_samples) -- i.e. a fraction of the *empirical* variance of the training
-# targets, not the manually configured `white: noise_level` from the benchmark YAML.
-# The original GammaPrior(2, 0.05) had mean=40 regardless of any data scale, which
-# pinned the fitted noise near the noise_constraint's upper bound for every
-# 'none'/'sequential'/'targetSampling' run. Tying the prior to `noise_level` instead
-# fixed that but only traded one sensitivity for another: that config value is set
-# inconsistently across benchmarks (e.g. 0.1/0.15/1 for datasets that are otherwise on
-# comparable, standardized scales), so results still swung with an arbitrary YAML knob.
-# Deriving target_mean from the data itself is self-calibrating and benchmark-
-# independent, validated at 100 seeds across sin_symmetric/sin_asymmetric/boston/
-# yacht/casp: sequential_joint comes out best-or-tied-best on RMSE/MAE/NLL/Sharpness
-# on every one of the 5, including yacht and casp where it previously lost even to
-# 'none'. (warped_gp/heteroscedastic_gp sometimes post a lower raw RMSE on yacht, but
-# at much worse CE/calibration -- a real accuracy/calibration tradeoff, not something
-# this fix leaves on the table.)
-#
-# Two starting-value subtleties made the difference, both easy to get backwards:
-#
-# 1. likelihood.noise's starting value, not just the prior's mean, matters:
-#    'sequential'/'batch' never refit noise during their removal loop (see
-#    calculate_aleatoric_uncertainty_influence's docstring), so whatever it's
-#    initialized to (NOISE_INIT_MULTIPLIER * data_var) is what their removal
-#    criterion uses for the *entire* run. It must stay near the data's own scale,
-#    not target_mean -- starting it at the prior's much smaller mean starves the
-#    criterion of a realistic noise estimate and makes removal drastically
-#    over-aggressive (empirically: 29/40 points removed on boston, RMSE ~4x worse).
-#
-# 2. That same value is a bad starting point for the post-removal MLE refit that
-#    'none'/'sequential'/'targetSampling' all run afterwards: the 50-step Adam
-#    optimizer converges to a *much* better optimum starting near
-#    NOISE_REFIT_INIT_MULTIPLIER * data_var (small) than from NOISE_INIT_MULTIPLIER
-#    * data_var (data-scale). This is why the likelihood is re-initialized a second
-#    time right before that refit block below. Confirmed empirically on yacht: this
-#    single change took sequential_joint from losing to relevance_pursuit (RMSE 0.068
-#    vs 0.059) to beating it (0.050 vs 0.059).
+# Noise prior of the GP likelihood (all methods except the BoTorch baselines):
+# GammaPrior(a, a / target_mean) with a = NOISE_PRIOR_CONCENTRATION and
+# target_mean = NOISE_PRIOR_MEAN_MULTIPLIER * var(y_train), i.e. scaled to the
+# empirical variance of the training targets, so it is independent of the
+# benchmark's scale. The noise upper bound is max(10 * var(y_train),
+# 2 * NOISE_INIT_MULTIPLIER * var(y_train)). With noise_init='data_variance'
+# the initial noise is NOISE_INIT_MULTIPLIER * var(y_train) (per seed).
+# Before the post-removal MLE refit, the noise is re-initialized to
+# NOISE_REFIT_INIT_MULTIPLIER * var(y_train) (the 50-step Adam refit converges
+# better from a small starting value).
 NOISE_PRIOR_CONCENTRATION = 1.1
 NOISE_PRIOR_MEAN_MULTIPLIER = 0.01
 NOISE_INIT_MULTIPLIER = 1
 NOISE_REFIT_INIT_MULTIPLIER = 0.005
-# 'targetSampling' filters training data down to whatever falls inside the (narrow)
-# target region A_limits -- a small, spatially clustered, near-collinear subset. The
-# small NOISE_PRIOR_MEAN_MULTIPLIER/NOISE_REFIT_INIT_MULTIPLIER that help the other
-# methods let its post-filter MLE refit collapse noise toward ~0 on that subset,
-# which is fine in-sample but catastrophically overconfident out-of-sample -- the
-# NLL blowups seen for targetSampling (e.g. 12.9±104 on sin_symmetric). It gets its
-# own, much larger prior mean instead (used for both its initial prior/likelihood
-# noise AND its post-filter refit starting point), to keep noise from collapsing
-# that low. mult=2.0 roughly halves NLL std and cuts the worst-case NLL outlier
-# 2-4x versus mult=1.0 on sin_symmetric, at a modest RMSE cost (0.508->0.520); higher
-# values (5.0+) stabilize NLL further but cost more RMSE -- this is a real trade-off,
-# not a free win, and the residual instability on extreme low-sample-count seeds
-# (e.g. only 2 points surviving the region filter) isn't fixable by prior alone.
+# 'targetSampling' keeps only the training points inside the target region (a
+# small, clustered subset). With the small multipliers above, its refit can
+# collapse the noise towards zero and become overconfident, so it uses a larger
+# prior mean and refit starting value instead.
 TARGET_SAMPLING_NOISE_MEAN_MULTIPLIER = 2.0
 
 # BoTorch imports for relevance pursuit, warped GP, and heteroscedastic GP
@@ -111,12 +73,10 @@ def evaluate(
     num_A_samples: int,
     seed: int = 0,
     fixed_kernel: bool = True,
-    show_plots: bool = False,
-    show_hessian: bool = False,
-    compare_optimal: bool = False,
     calculate_convexity: bool = False,
     removal_threshold: float = 0.0,
     map_noise: bool = False,
+    noise_init: str = 'config',
     objective_type: str = 'function',
     feature_subset: Optional[Union[int, List[int]]] = None,
     kernel_config: Optional[List[dict]] = None,
@@ -130,35 +90,32 @@ def evaluate(
     Evaluate the GP optimization method using GPyTorch.
 
     Args:
-        method: Optimization method ('none', 'sequential', 'batch', 'targetSampling')
+        method: 'none', 'sequential', 'batch', 'targetSampling', 'relevance_pursuit',
+            'warped_gp' or 'heteroscedastic_gp'
         objective_func: Function to optimize or dataset name
         noise: Noise type ('joint', 'epistemic', 'aleatoric')
-        A_limits: Limits for active learning region
+        A_limits: Limits of the target region A
         X_limits: Limits for full domain
         num_samples: Number of samples to generate
         num_train_samples: Number of initial training samples
-        num_A_samples: Number of active learning samples
+        num_A_samples: Number of test points in the target region
         seed: Random seed
         fixed_kernel: Whether to fix kernel hyperparameters
-        show_plots: Whether to show plots
-        show_hessian: Whether to show Hessian
-        calculate_convexity: Whether to compute curvature bounds m_epi and M_ale
+        calculate_convexity: Whether to track the restricted curvature during removal
         removal_threshold: Minimum removal gain -influence for sequential removal
+        noise_init: Initial GP noise variance, i.e. the noise level the removal
+            criterion of 'sequential'/'batch' starts from: 'config' uses the
+            kernel config's `white: noise_level` (or gp_alpha), 'data_variance'
+            uses NOISE_INIT_MULTIPLIER * var(y_train) of the current seed
         map_noise: Evaluate the sequential removal criterion at the MAP-II noise
             of the current subset (see sequentially_optimize_samples)
         objective_type: Type of objective ('function' or 'dataset')
         feature_subset: Subset of features to use
         kernel_config: Kernel configuration
         gp_alpha: GP noise parameter
-        gamma_prior_a: Pins the noise-prior concentration (overrides the
-            self-calibrating default) -- used by the gamma_prior_a curvature
-            ablation. None uses the self-calibrating default prior.
-        gamma_prior_b: Target noise-prior MEAN to hold fixed while
-            gamma_prior_a is swept (the rate is derived as b = a /
-            gamma_prior_b), NOT the rate itself -- keeps the ablation
-            isolated to concentration instead of also sweeping the believed
-            noise scale. Ignored unless gamma_prior_a is set; None then
-            falls back to the self-calibrating target_mean.
+        gamma_prior_a: Noise-prior concentration a (None: default prior)
+        gamma_prior_b: Noise-prior mean to hold fixed when gamma_prior_a is set
+            (rate = a / gamma_prior_b); None uses the default prior mean
         device: Device for computation ('cpu' or 'cuda')
         return_plot_data: Whether to return plotting data (for comparison plots)
 
@@ -175,7 +132,7 @@ def evaluate(
     device = torch.device(device)
     
     if objective_type == 'function':
-        # For functions, assume 1D for now (can be extended)
+        # 1D: evenly spaced grid; multi-D: uniform random samples
         if not isinstance(X_limits[0], (list, tuple)):
             # 1D case
             x = np.linspace(X_limits[0], X_limits[1], num_samples)
@@ -281,7 +238,7 @@ def evaluate(
         y_samples = y_samples[sorted_indices]
     
     if kernel_config is None:
-        # Default kernel configuration (backward compatibility)
+        # Default kernel if the config specifies none
         if n_dims == 1:
             kernel_config = [
                 {'type': 'rbf', 'length_scale': 1.0},
@@ -302,37 +259,17 @@ def evaluate(
     y_samples_torch = torch.from_numpy(y_samples).float().to(device)
     x_A_torch = torch.from_numpy(x_A).float().to(device)
     
-    # Create likelihood and model
-    # Gamma prior scaled to the empirical variance of the actual training targets,
-    # not the manually configured `white: noise_level` -- that value is set
-    # inconsistently across benchmark configs (e.g. 0.1/0.15/1 for benchmarks that
-    # are otherwise on comparable scales), which made results overly sensitive to
-    # an arbitrary YAML knob. Using the data's own variance is self-calibrating and
-    # benchmark-independent.
+    # Create likelihood and model (noise prior scaled to var(y_train), see top of file)
     a = NOISE_PRIOR_CONCENTRATION
     data_var = float(y_samples_torch.var().clamp(min=1e-8))
     mean_multiplier = TARGET_SAMPLING_NOISE_MEAN_MULTIPLIER if method == 'targetSampling' else NOISE_PRIOR_MEAN_MULTIPLIER
     target_mean = mean_multiplier * data_var
     initial_noise = NOISE_INIT_MULTIPLIER * data_var
     noise_upper_bound = max(data_var * 10.0, initial_noise * 2.0, 1e-4)
-    # gamma_prior_a lets a caller pin the Gamma noise-prior concentration `a`
-    # directly -- used for the curvature-analysis ablation over `a` (Section M
-    # / Figure 25 of the paper): main.py's gamma_prior_a sweep constructs one
-    # model per `a` this way, all else held fixed, so the only thing that
-    # changes between runs is the prior actually attached to model.likelihood
-    # -- which compute_joint_negJ_hessian / calculate_restricted_curvature_
-    # bounds read directly off the model.
-    #
-    # gamma_prior_b is NOT used as the rate directly: GammaPrior(a, b) has
-    # mean a/b, so pinning a literal rate while sweeping `a` would also sweep
-    # the prior's believed noise level (mean) by ~2 orders of magnitude over
-    # a typical [1.1, ..., 100] sweep -- confounding "concentration" with
-    # "how much noise the prior insists on" (the ablation's actual variable
-    # of interest is the former). Instead gamma_prior_b is read as the target
-    # MEAN to hold fixed, and the rate is derived as b = a / target_mean_pin
-    # so every `a` in the sweep shares the same noise level and only
-    # concentration around it changes. Falls back to the self-calibrating
-    # target_mean (data_var-based) if gamma_prior_b is left unset.
+    # gamma_prior_a pins the prior concentration `a` (Gamma-prior ablation of the
+    # curvature analysis). gamma_prior_b is the prior MEAN to hold fixed while `a`
+    # is varied (rate = a / mean), so only the concentration changes; without it
+    # the self-calibrating target_mean is used.
     if gamma_prior_a is not None:
         a = gamma_prior_a
         target_mean_pin = gamma_prior_b if gamma_prior_b is not None else target_mean
@@ -343,19 +280,21 @@ def evaluate(
         noise_prior=noise_prior,
         noise_constraint=Interval(1e-6, noise_upper_bound)
     )
-    # Initial noise value stays at the data's own scale, not the prior's (much
-    # smaller) mean: 'sequential'/'batch' never refit noise during their removal
-    # loop, so this is the noise level their removal criterion actually uses --
-    # starting it near the tiny prior mean starves that criterion of a realistic
-    # noise estimate and makes it drastically over-aggressive.
-    if white_noise_level is not None:
-        likelihood.noise = white_noise_level   # = the YAML `white: noise_level` value directly
+    # Initial noise (see noise_init). The removal loop of 'sequential'/'batch'
+    # does not refit the noise, so this is the noise level their removal
+    # criterion starts from. All methods refit the noise afterwards.
+    if noise_init == 'data_variance':
+        likelihood.noise = initial_noise
+    elif noise_init == 'config':
+        if white_noise_level is not None:
+            likelihood.noise = white_noise_level
+        else:
+            likelihood.noise = gp_alpha
     else:
-        likelihood.noise = gp_alpha
+        raise ValueError(f"Unknown noise_init '{noise_init}' (use 'config' or 'data_variance')")
 
-    # Note: likelihood noise is always trainable (will be optimized)
-    # For the jacobian kernel, use the network output as the GP mean (laplax
-    # linearisation centre f(x, theta*)); otherwise ConstantMean as before.
+    # For the jacobian (NN) kernel, the network output is the GP mean (the
+    # linearization point f(x, theta*)); otherwise a constant mean.
     mean_module = None
     if hasattr(kernel, 'jac_mlp'):
         from .helper.nn_kernel import MLPMean
@@ -553,7 +492,6 @@ def evaluate(
             kernel=mean_kernel,
             max_iter=10,
             tol=1e-03,
-            var_estimate='paper',
             var_samples=1000,
             norm_and_std=True
         )
@@ -581,8 +519,6 @@ def evaluate(
             x_A_torch,
             max_iter=len(x_samples) - 2,
             noise_type=noise,
-            show_hessian=show_hessian,
-            compare_optimal=compare_optimal,
             calculate_convexity=calculate_convexity,
             A_limits=A_limits,
             removal_threshold=removal_threshold,
@@ -613,12 +549,7 @@ def evaluate(
     # Refit model with optimized samples (skip for BoTorch models as they're already fitted)
     if method not in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp']:
         try:
-            # Re-initialize noise for the MLE refit itself: this Adam optimization
-            # converges better from a lower starting point than the value used above
-            # for 'sequential'/'batch' removal decisions (see NOISE_REFIT_INIT_MULTIPLIER).
-            # 'targetSampling' keeps its own larger starting point (see
-            # TARGET_SAMPLING_NOISE_MEAN_MULTIPLIER) -- a tiny one lets its refit
-            # collapse noise toward 0 on the small, clustered, post-filter subset.
+            # Re-initialize the noise for the MLE refit (see top of file)
             refit_multiplier = TARGET_SAMPLING_NOISE_MEAN_MULTIPLIER if method == 'targetSampling' else NOISE_REFIT_INIT_MULTIPLIER
             likelihood.noise = refit_multiplier * data_var
             model.set_train_data(x_samples_opt_torch, y_samples_opt_torch, strict=False)
@@ -657,9 +588,7 @@ def evaluate(
             y_pred_opt = np.zeros_like(y)
             y_std_opt = np.ones_like(y) * 5
             errors = calculate_prediction_errors(
-                x, y_pred_opt, y_std_opt, y, A_limits, 
-                plot=show_plots, 
-                title=f"{method}{noise} Calibration Curve {seed}"
+                x, y_pred_opt, y_std_opt, y, A_limits
             )
             return errors, len(x_samples_opt)
     
@@ -710,35 +639,12 @@ def evaluate(
         y_std_opt = np.ones_like(y) * 5
     
     errors = calculate_prediction_errors(
-        x, y_pred_opt, y_std_opt, y, A_limits, 
-        plot=show_plots, 
-        title=f"{method}{noise} Calibration Curve {seed}"
+        x, y_pred_opt, y_std_opt, y, A_limits
     )
     
     # Add runtime to errors
     runtime = time.time() - start_time
     errors['Runtime'] = runtime
-    
-    # Only plot for 1D case (single method plots)
-    if show_plots and n_dims == 1 and plot_func is not None and not return_plot_data:
-        plot_predictions(
-            plot_func,
-            x.flatten(),
-            x_samples_opt.flatten(),
-            y_samples_opt,
-            y_pred_opt,
-            y_std_opt,
-            X_limits,
-            A_limits,
-            title=f"{method}{noise} Optimized GP Predictions {seed}"
-        )
-    
-    # Plot curvature bounds if they were calculated
-    if calculate_convexity and show_plots and curvature_history and curvature_history.get('m'):
-        plot_curvature_bounds(
-            curvature_history, 
-            title=f"Restricted Curvature - {getattr(objective_func, '__name__', objective_func)}"
-        )
     
     # Return plot data if requested (for comparison plots)
     if return_plot_data:

@@ -9,9 +9,9 @@ bayes_opt:
     kappa: 2.576
   save_results: true
   plot_results: true
-  results_path: botorch_griewank_noisy_statistical.txt
+  results_path: ucb_noisy/botorch_griewank_noisy_statistical.txt
   sample_optimization:
-    algorithm: [target_region]
+    algorithm: [none, joint, warped_gp, relevance_pursuit, trimmed_mll, student_t, target_region]
     method: sequential 
     min_samples: 5
   kernel:

@@ -3,28 +3,20 @@ experiment:
   method: [none, sequential, targetSampling, relevance_pursuit, warped_gp, heteroscedastic_gp]
   objective: twitter
   noise: [joint, aleatoric]
-  # Twitter Flash Crash Dataset - DJIA prices on April 23, 2013
-  # A fake tweet about an explosion at the White House caused a brief market crash around 1:10 PM
-  # Original data: ~405 time points from 9:30 AM to 4:00 PM (390 minutes of trading)
-  # After normalization, the data is centered at 0 with std ~1
-  
-  # A_limits: Active learning region (focused around the flash crash event)
-  # The crash happened at approximately index 220 out of 405 points (around normalized time ~0)
-  # We focus on a window around the crash: roughly -1.5 to 1.5 in normalized time
-  # This corresponds to about +/- 60 minutes around the crash in real time
+  # Twitter flash crash: DJIA prices on April 23, 2013 (405 one-minute points,
+  # 9:30 AM - 4:14 PM). A fake tweet caused a brief crash around 1:10 PM.
+  # Time and price are standardized (normalized time spans about [-1.73, 1.73]).
+  # A_limits: target region (about 2:20-2:50 PM, after the crash)
   A_limits: [0.75, 1]
-  
-  # X_limits: Full trading day range (covers ~99.7% of normalized time data)
-  # The full normalized time range is approximately [-3, 3] (representing 9:30 AM to 4:00 PM)
+  # X_limits: input domain
   X_limits: [-1.5, 1.5]
-  
-  num_samples: 405  # Use all available data points from the trading day
-  num_train_samples: 75  # Initial training samples (before crash detection)
-  num_A_samples: 80  # Dense sampling in the active region around the crash
-  seed: 100
+  num_samples: 405       # all data points
+  num_train_samples: 75  # training samples drawn from the whole domain
+  num_A_samples: 80      # test points in the target region
+  seed: 100              # seeds 0-99
   fixed_kernel: false
-  show_plots: false  # Enable plots for 1D time series visualization
-  show_hessian: false
+  noise_init: data_variance  # initial GP noise = var(y_train) of each seed
+  show_plots: false
   feature_subset: null  # Use the single time feature
   kernel:
     - type: 'matern'

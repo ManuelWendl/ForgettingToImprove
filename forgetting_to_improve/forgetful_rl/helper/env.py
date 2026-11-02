@@ -1,16 +1,15 @@
-import gymnasium as gym
 import numpy as np
 import omegaconf
+import torch
 from typing import Tuple, Optional, Union, Dict
 
+# The wrappers below come from the legacy `gym` package (as in the paper's
+# experiments); the cartpole environment itself is a gymnasium env.
+import gym
+
 from ..env import cartpole_continuous
-from ..env import mujoco_envs
 from ..env import termination_fns as term_functions
 from ..env import reward_fns as reward_functions
-
-import torch
-import numpy as np
-import gym
 
 
 class RewardTermWrapper(gym.Wrapper):
@@ -66,54 +65,22 @@ class EnvHandler:
         
         env_name = cfg.overrides.env
         
-        # --- Environment & Logic Mapping (Consolidated from Legacy) ---
+        # --- Environment and reward/termination functions ---
         if env_name == "cartpole_continuous":
             env = cartpole_continuous.CartPoleEnv()
-            # Early termination deactivated (see cartpole_continuous.py's step()):
-            # episodes run the full trial_length instead of ending when the pole
-            # falls / cart leaves the bounds. reward_fns.cartpole still reflects
-            # in-bounds vs. out-of-bounds via termination_fns.cartpole internally, so
-            # the "this is a bad state" signal is preserved -- only the early reset
-            # is disabled. This also keeps model rollouts (which use term_fn as
-            # dynamics_model.termination_fn) from ending imagined trajectories early.
+            # No early termination (see cartpole_continuous.py's step()): episodes run
+            # for trial_length steps; the reward is 0 outside the balance bounds. Model
+            # rollouts use the same no-termination function.
             term_fn = term_functions.no_termination
             reward_fn = reward_functions.cartpole
-        elif env_name == "cartpole_pets_version":
-            env = mujoco_envs.CartPoleEnv()
-            term_fn = term_functions.no_termination
-            reward_fn = reward_functions.cartpole_pets
-        elif env_name == "pets_halfcheetah":
-            env = mujoco_envs.HalfCheetahEnv()
-            term_fn = term_functions.no_termination
-            reward_fn = getattr(reward_functions, "halfcheetah", None)
-        elif env_name == "pets_reacher":
-            env = mujoco_envs.Reacher3DEnv()
-            term_fn = term_functions.no_termination
-            reward_fn = None
-        elif env_name == "pets_pusher":
-            env = mujoco_envs.PusherEnv()
-            term_fn = term_functions.no_termination
-            reward_fn = reward_functions.pusher
-        elif env_name == "ant_truncated_obs":
-            env = mujoco_envs.AntTruncatedObsEnv()
-            term_fn = term_functions.ant
-            reward_fn = None
-        elif env_name == "humanoid_truncated_obs":
-            env = mujoco_envs.HumanoidTruncatedObsEnv()
-            term_fn = term_functions.humanoid
-            reward_fn = None
-        elif "gym___" in env_name:
-            env = gym.make(env_name.split("___")[1])
-            term_fn = getattr(term_functions, cfg.overrides.term_fn)
-            reward_fn = getattr(reward_functions, cfg.overrides.get("reward_fn", cfg.overrides.term_fn), None)
         elif "dmc___" in env_name:
-            # DeepMind Control Suite environments
-            # Format: dmc___domain_name___task_name
+            # DeepMind Control Suite environment, format dmc___<domain>___<task>
+            # (e.g. dmc___cartpole___swingup); requires dm_control.
             from ..helper import dmc2gym
             parts = env_name.split("___")
             domain_name = parts[1]
             task_name = parts[2]
-            # support action repeat / frame-skip via config key `action_repeat` (or `frame_skip`)
+            # action repeat / frame skip via `action_repeat` (or `frame_skip`)
             frame_skip = cfg.overrides.get("action_repeat", cfg.overrides.get("frame_skip", 1))
             env = dmc2gym.make(
                 domain_name=domain_name,
@@ -123,9 +90,7 @@ class EnvHandler:
                 episode_length=cfg.overrides.get("trial_length", 1000)
             )
             term_fn = term_functions.no_termination
-            # allow users to override the built-in DMC reward with a custom
-            # function (e.g. to make the task sparse).  This mirrors the logic
-            # used for gym environments above.
+            # Optional custom reward (e.g. cartpole_swingup_sparse); default: DMC reward
             reward_fn = None
             if cfg.overrides.get("reward_fn") is not None:
                 reward_fn = getattr(
@@ -133,18 +98,16 @@ class EnvHandler:
                     cfg.overrides.reward_fn,
                     None,
                 )
-            # DMC environments already have TimeLimit wrapper, skip the wrapper step below
-            skip_time_limit = True
         else:
             raise ValueError(f"Invalid environment string: {env_name}")
 
         # --- Standard Wrappers ---
-        # Skip TimeLimit for DMC environments as they already come wrapped
-        if not 'skip_time_limit' in locals():
+        # DMC environments already have a time limit
+        if "dmc___" not in env_name:
             trial_length = cfg.overrides.get("trial_length", 1000)
             env = gym.wrappers.TimeLimit(env, max_episode_steps=trial_length)
 
-        # Handle MBPO learned rewards preference
+        # With learned rewards, no analytic reward function is used
         if cfg.overrides.get("learned_rewards", True):
             reward_fn = None
         # --- Wrap environment if a custom reward or termination is requested ---
@@ -153,10 +116,9 @@ class EnvHandler:
             # gather any kwargs for the reward/termination functions
             rw_kwargs = {}
             tw_kwargs = {}
-            # support a configurable threshold for sparse rewards
+            # thresholds of the sparse swingup reward
             if reward_fn is not None and cfg.overrides.get("sparse_threshold") is not None:
                 rw_kwargs["threshold"] = cfg.overrides.sparse_threshold
-            # allow an additional cart‑position threshold for swingup reward
             if reward_fn is not None and cfg.overrides.get("sparse_x_threshold") is not None:
                 rw_kwargs["x_threshold"] = cfg.overrides.sparse_x_threshold
             env = RewardTermWrapper(

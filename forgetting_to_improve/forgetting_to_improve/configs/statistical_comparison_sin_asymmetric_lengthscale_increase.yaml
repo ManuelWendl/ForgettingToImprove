@@ -8,10 +8,10 @@ experiment:
   num_samples: 1000
   num_train_samples: 20
   num_A_samples: 50
-  seed: 100  # This means seeds 0-99 (100 seeds total)
+  seed: 100  # seeds 0-99
   fixed_kernel: false
+  noise_init: data_variance  # initial GP noise = var(y_train) of each seed
   show_plots: false
-  show_hessian: false
   kernel:
   - type: 'matern'
     length_scale: 1

@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 from typing import Tuple, Optional, Dict
-import sys
-sys.path.append('../../../')
 
 import gpytorch
 
@@ -18,8 +16,6 @@ def filter_replay_buffer(
     target_region: TargetRegion,
     max_iter: int = 20,
     noise_type: str = 'joint',
-    show_hessian: bool = False,
-    compare_optimal: bool = False,
     batch_optimize: bool = True,
     max_samples: int = 500,  # Maximum samples to avoid OOM
     store_data_removal: bool = False,
@@ -27,24 +23,13 @@ def filter_replay_buffer(
     """
     Filter the replay buffer by removing samples that negatively impact the dynamics model.
 
-    For MultitaskGP models, processes each output dimension separately and removes samples
-    that are detrimental for ANY dimension.
+    Each output (state) dimension is processed separately, and a sample is removed
+    if it is detrimental for ANY dimension.
 
-    Reward is NOT one of those dimensions -- it is excluded entirely (not filtered on
-    at all), and is expected to no longer be part of what the dynamics model predicts
-    in the first place: reward is often (near-)constant per env step (e.g. CartPole
-    balance reward=1/step) or otherwise poorly explained by a rank-deficient linear
-    kernel (e.g. PETS cartpole's dense reward), which made the curvature-based
-    influence score negative for ~95-100% of samples regardless of noise prior/init
-    (diagnosed empirically on both, see chat), and even a bounded fixed-fraction
-    workaround tried here previously never converged to "nothing needs removing" the
-    way the state-delta dimensions do, perpetually capping the buffer size instead.
-    The actual fix lives upstream: see `algorithm/mbpo.py`'s `learn_reward` /
-    `reward_fn` wiring and `model/gp_model.py`'s `learn_reward` flag -- when an
-    analytic reward_fn is supplied (`overrides.learned_rewards: false`), the model
-    only predicts state deltas, reward is computed analytically from the predicted
-    next state, and this function's `model`/`y_samples` never include a reward
-    dimension to begin with.
+    The reward is not filtered on: with an analytic reward function
+    (`overrides.learned_rewards: false`, see `algorithm/mbpo.py` and
+    `model/gp_model.py`) the model only predicts the state, and the reward is
+    computed from the predicted next state.
 
     The filtering is based on:
     1. Target region states (from SAC buffer) define x_test - the region we care about
@@ -53,14 +38,15 @@ def filter_replay_buffer(
 
     Args:
         replay_buffer: ReplayBuffer containing real environment observations
-        model: Trained dynamics model (GP or ensemble)
+        model: Trained GP dynamics model
         likelihood: GPyTorch likelihood (for GP models)
         target_region: TargetRegion object determining which states matter (x_test)
         max_iter: Maximum iterations for sequential optimization
         noise_type: Type of uncertainty ('joint', 'epistemic', 'aleatoric')
-        show_hessian: Whether to visualize Hessian (only for 1D)
-        compare_optimal: Whether to compare with optimal subset selection
+        batch_optimize: Remove all detrimental samples at once (batch_optimize_samples)
+            instead of one at a time (sequentially_optimize_samples)
         max_samples: Maximum number of samples to process (subsample if larger to avoid OOM)
+        store_data_removal: Also return the kept/removed transitions
 
     Returns:
         filtered_buffer: New ReplayBuffer with detrimental samples removed
@@ -87,8 +73,7 @@ def filter_replay_buffer(
     # Concatenate obs and actions as inputs
     x_samples = torch.cat([obs, actions], dim=1)
 
-    # Target: delta obs only -- reward is excluded entirely (see docstring), matching
-    # what the dynamics model actually predicts when learn_reward=False.
+    # Targets: state deltas (the reward is not filtered on, see docstring)
     y_samples = next_obs - obs
     
     # Get test points from target region (states we care about)
@@ -100,8 +85,7 @@ def filter_replay_buffer(
         test_indices = np.random.choice(len(target_states), 3000, replace=False)
         target_states = target_states[test_indices]
     
-    # For x_test, we need state-action pairs. Sample actions from random or use mean action
-    # Here we'll create a grid by pairing each target state with mean actions from buffer
+    # Test inputs: target-region states paired with the mean action of the buffer
     mean_action = torch.FloatTensor(all_data.act).mean(dim=0, keepdim=True)
     x_test = torch.cat([
         target_states, 
@@ -121,9 +105,7 @@ def filter_replay_buffer(
     original_train_inputs = None
     original_train_targets = None
     is_multitask = hasattr(model, 'num_tasks')
-    # Shared-trunk jacobian (last-layer Laplace) model -- see model/jacobian_model.py.
-    # Additive: mutually exclusive with is_multitask, existing behaviour for
-    # is_multitask / plain single-task models below is untouched.
+    # Shared-trunk jacobian (last-layer Laplace) model, see model/jacobian_model.py
     is_shared_jacobian = hasattr(model, 'gp_models') and hasattr(model, 'shared_mlp')
 
     if is_multitask and hasattr(model, 'train_inputs'):
@@ -134,9 +116,8 @@ def filter_replay_buffer(
     # Store sampled size
     sampled_size = len(x_samples)
 
-    # Process each output dimension separately (state-delta dims only -- reward is
-    # excluded entirely, see docstring).
-    # For MultitaskGP, we need to create single-task GPs for each dimension.
+    # Process each output dimension separately (state dimensions only).
+    # For MultitaskGP, a single-task GP is created per dimension.
     filtered_indices_list = []
 
     if is_shared_jacobian:
@@ -175,19 +156,9 @@ def filter_replay_buffer(
             single_likelihood.eval()
 
         elif is_shared_jacobian:
-            # Reuse this dimension's own GP (shared trunk + its own
-            # JacobianKernel/MLPMeanIndexed) directly, instead of rebuilding a
-            # fresh kernel like the MultitaskGP branch above does -- so the
-            # removal criterion scores against the exact same model that's
-            # actually predicting. Its JacobianKernel carries no
-            # `jac_finetune` (see build_shared_jacobian_kernels), so
-            # optimize.py's per-removal MLP finetune hook (used only by
-            # sequentially_optimize_samples, not batch_optimize_samples) is
-            # automatically a no-op here -- the shared trunk is only ever
-            # refit once, jointly across every dimension, after this loop
-            # (see "full fine-tuning" call below), never per-dimension
-            # mid-loop, which would desync one dimension's features from
-            # another's.
+            # Use this dimension's own GP (shared trunk + its own kernel/mean),
+            # i.e. the model that actually predicts. The shared trunk is refit
+            # once, jointly for all dimensions, after this loop.
             dim_model = model.gp_models[dim]
             dim_model.set_train_data(x_samples, y_dim, strict=False)
             dim_model.eval()
@@ -199,7 +170,7 @@ def filter_replay_buffer(
             if hasattr(dim_model, 'set_train_data'):
                 dim_model.set_train_data(x_samples, y_dim, strict=False)
         
-        # Run sequential optimization for this dimension
+        # Remove detrimental samples for this dimension
         if batch_optimize:
             x_filtered, y_filtered, deleted_samples, _ = batch_optimize_samples(
                 model=dim_model,
@@ -215,8 +186,6 @@ def filter_replay_buffer(
                 x_test=x_test,
                 max_iter=max_iter,
                 noise_type=noise_type,
-                show_hessian=show_hessian,
-                compare_optimal=compare_optimal,
             )
         # Find which indices were kept
         kept_mask = torch.ones(len(x_samples), dtype=torch.bool, device=x_samples.device)
@@ -229,9 +198,8 @@ def filter_replay_buffer(
         
         print(f"[Filter] Dimension {dim}: Kept {kept_mask.sum().item()}/{sampled_size} samples")
     
-    # Combine: keep only samples that are kept in ALL (non-reward) dimensions
-    # (OR we could use ANY to be more aggressive: remove if bad in any dim)
-    # Let's use ANY - remove if detrimental in ANY dimension
+    # Keep a sample only if it is kept in ALL dimensions
+    # (i.e. remove it if it is detrimental in ANY dimension)
     final_kept_mask = torch.ones(len(x_samples), dtype=torch.bool, device=x_samples.device)
     for kept_mask in filtered_indices_list:
         final_kept_mask = final_kept_mask & kept_mask
@@ -239,27 +207,15 @@ def filter_replay_buffer(
     print(f"[Filter] Final: Kept {final_kept_mask.sum().item()}/{sampled_size} samples "
           f"(intersection across state-delta dims, reward excluded)")
 
-    # Shared-trunk jacobian model: the "full fine-tuning" variant -- one
-    # single, joint trunk+head refit on the samples retained across ALL
-    # dimensions, run exactly once here (never per-dimension inside the loop
-    # above). See JacobianGPModel.finetune_shared_trunk for why deferring to
-    # this combined mask (rather than refitting per-dimension mid-loop, the
-    # way the single-output optimize._finetune_kernel_mlp hook works) is what
-    # keeps every output dimension's features consistent with one another.
+    # Shared-trunk jacobian model: one joint refit of the trunk on the samples
+    # kept in all dimensions (keeps the features of all dimensions consistent)
     if is_shared_jacobian and hasattr(model, 'finetune_shared_trunk'):
         kept_idx = torch.where(final_kept_mask)[0]
         if len(kept_idx) >= 2:
             y_finetune = y_samples[kept_idx]
-            # y_samples is ALWAYS state-deltas only -- reward is deliberately
-            # excluded from the removal/scoring criterion above (see module
-            # docstring). But the shared trunk's own head predicts
-            # [state-deltas, reward] when the model has learn_reward=True
-            # (same convention as JacobianGPModel.train_model), so a joint
-            # refit against state-deltas alone would target-shape-mismatch
-            # against the trunk's actual output width -- reattach the
-            # matching reward column here (from the same retained rows) so
-            # every head the trunk has stays supervised, rather than going
-            # stale under the trunk features this refit is about to shift.
+            # y_samples holds the state dimensions only; if the trunk also
+            # predicts the reward (learn_reward=True), append the reward column
+            # of the kept rows so that its output width matches.
             if getattr(model, 'learn_reward', False):
                 kept_idx_np = kept_idx.cpu().numpy()
                 reward_kept = torch.as_tensor(

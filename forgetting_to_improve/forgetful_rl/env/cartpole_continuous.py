@@ -87,13 +87,8 @@ class CartPoleEnv(gym.Env):
 
         self.state = (x, x_dot, theta, theta_dot)
 
-        # Early termination deactivated: the pole falling / cart leaving the bounds
-        # no longer ends the episode -- only the TimeLimit wrapper's truncation at
-        # trial_length does. Reward still reflects whether the state is within the
-        # balance bounds (1.0 if so, 0.0 if not), so the signal that "this is a bad
-        # state" is preserved; the episode just doesn't reset because of it, and SAC's
-        # bootstrapping (`reverse_mask=True` in sac.update_parameters) doesn't get an
-        # artificial terminal cutoff at the failure point.
+        # No early termination: only the TimeLimit wrapper ends an episode (at
+        # trial_length). The reward is 1 inside the balance bounds and 0 outside.
         out_of_bounds = bool(
             x < -self.x_threshold
             or x > self.x_threshold

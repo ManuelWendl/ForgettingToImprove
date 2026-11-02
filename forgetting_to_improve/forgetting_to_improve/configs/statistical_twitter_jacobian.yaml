@@ -1,0 +1,28 @@
+experiment:
+  # 100-seed comparison with the jacobian (NN) kernel: no removal (none) vs
+  # sequential removal with fine-tuning of the MLP after each removal.
+  type: statistic
+  method: [none, sequential]
+  objective: twitter
+  noise: joint
+  A_limits: [0.75, 1.25]
+  X_limits: [-1.5, 1.5]
+  num_samples: 405
+  num_train_samples: 75
+  num_A_samples: 80
+  seed: 100            # seeds 0-99
+  fixed_kernel: true
+  show_plots: false
+  kernel:
+    - type: jacobian
+      hidden: 32
+      depth: 2
+      activation: relu
+      last_layer: true
+      epochs: 800
+      lr: 0.01
+      prior_prec: 1.0
+      finetune_epochs: 600   # per-removal fine-tuning on the reduced set
+      finetune_lr: 0.01
+    - type: white
+      noise_level: 1.0

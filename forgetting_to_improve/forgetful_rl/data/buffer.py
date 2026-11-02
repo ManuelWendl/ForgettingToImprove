@@ -52,7 +52,6 @@ class ReplayBuffer:
         if max_trajectory_length:
             self.trajectory_indices = []
             capacity += max_trajectory_length
-        # TODO replace all of these with a transition batch
         self.obs = np.empty((capacity, *obs_shape), dtype=obs_type)
         self.next_obs = np.empty((capacity, *obs_shape), dtype=obs_type)
         self.action = np.empty((capacity, *action_shape), dtype=action_type)

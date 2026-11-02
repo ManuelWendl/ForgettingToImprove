@@ -1,16 +1,12 @@
 import numpy as np
-from typing import Optional
 from scipy import stats
-from .plot_gp import plot_calibration_curve
 
 def calculate_prediction_errors(
     x_data: np.ndarray,
     y_prediction: np.ndarray,
     stddev_prediction: np.ndarray,
     y_test: np.ndarray,
-    region = None,
-    plot: bool = False,
-    title: Optional[str] = None
+    region = None
 ) -> dict:
     """
     Calculate error metrics and calibration error for GP predictions.
@@ -27,10 +23,6 @@ def calculate_prediction_errors(
         True target values
     region : tuple, list of tuples, or None
         Region limits. For 1D: (min, max). For multidimensional: [(min1, max1), (min2, max2), ...]
-    plot : bool
-        Whether to create plots
-    title : str, optional
-        Title for plots
     """
     # Filter data to target region if specified
     if region is not None:
@@ -76,11 +68,11 @@ def calculate_prediction_errors(
     nll = 0.5 * np.mean(np.log(2 * np.pi * stddev_filtered**2) + (errors**2 / (stddev_filtered**2)))
 
     # Calculate calibration error
-    calibration_error = kuleshov_calibration_error(y_true_filtered, y_pred_filtered, stddev_filtered, plot=plot, title=title)
+    calibration_error = kuleshov_calibration_error(y_true_filtered, y_pred_filtered, stddev_filtered)
 
     # Additional calibration metrics
-    ece_variance = ece_regression_levi(y_true_filtered, y_pred_filtered, stddev_filtered, plot=plot, title=title)
-    ece_interval = ece_regression_capone(errors, stddev_filtered, plot=plot, title=title)
+    ece_variance = ece_regression_levi(y_true_filtered, y_pred_filtered, stddev_filtered)
+    ece_interval = ece_regression_capone(errors, stddev_filtered)
     sharpness = sharpness_metric(stddev_filtered)
 
     return {
@@ -100,9 +92,7 @@ def kuleshov_calibration_error(
     y_pred_mu: np.ndarray,
     y_pred_std: np.ndarray,
     p_levels: np.ndarray = None,
-    weights: np.ndarray = None,
-    plot: bool = False,
-    title: Optional[str] = None
+    weights: np.ndarray = None
 ) -> float:
     """
     Two-sided (central-interval) version of the Kuleshov et al. (2018)
@@ -132,9 +122,6 @@ def kuleshov_calibration_error(
 
     sq_diffs = (p_levels - p_hat) ** 2
 
-    if plot:
-        plot_calibration_curve(p_levels, p_hat, title=title + " CE" if title else "CE")
-
     return float(np.sum(weights * sq_diffs))
 
 def ece_regression_levi(
@@ -142,16 +129,12 @@ def ece_regression_levi(
     mu: np.ndarray,
     std: np.ndarray,
     n_bins: int = 10,
-    use_rmse: bool = False,
-    plot: bool = False,
-    title: str = "V-ECE Calibration Curve"
+    use_rmse: bool = False
 ) -> float:
     """
     Expected Calibration Error (ECE) for regression, as in:
       Levi et al., "Evaluating and Calibrating Uncertainty Prediction in Regression Tasks",
       arXiv:1905.11659 / Sensors, 2022.
-
-    Optionally plots the calibration curve.
     """
     errors = np.abs(y - mu)
     
@@ -195,10 +178,9 @@ def ece_regression_levi(
 
     return float(ece)/n_bins
 
-def ece_regression_capone(errors: np.ndarray, stddevs: np.ndarray, n_bins: int = 10, plot: bool = False, title: str = "I-ECE") -> float:
+def ece_regression_capone(errors: np.ndarray, stddevs: np.ndarray, n_bins: int = 10) -> float:
     """
     Calculate Expected Calibration Error (ECE) by binning predictions by confidence.
-    Optionally plot the calibration curve.
     """
     # Calculate confidence scores (inverse of standard deviation)
     confidences = 1 / (1 + stddevs)

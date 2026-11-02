@@ -1,15 +1,19 @@
 """
-Script to load and plot saved learning histories without re-running experiments.
+Plot saved BO learning histories without re-running experiments.
 
-Usage:
-    Single file:
-    python -m forgetting_to_improve.forgetfull_bayesian_optimization.helper.plot_saved_results -f ./forgetting_to_improve/forgetfull_bayesian_optimization/results/botorch_ackley_2d_statistical.txt -o custom_figure_folder/
+Each results subfolder (written by main.py, see the `results_path` of each
+config) holds one *_statistical.txt / *_history.pkl pair per benchmark, with
+all methods of that config. Passing a folder plots every benchmark in it
+into one combined figure (simple regret, cumulative regret, best value,
+runtime).
 
-    Folder (all results in one plot):
-    python -m forgetting_to_improve.forgetfull_bayesian_optimization.helper.plot_saved_results -f ./forgetting_to_improve/forgetfull_bayesian_optimization/results/stable_baseline/ -o custom_figure_folder/
+Usage (from the repository root):
+    python -m forgetting_to_improve.forgetful_bayesian_optimization.helper.plot_saved_results \
+        -f forgetting_to_improve/forgetful_bayesian_optimization/results/ucb/ \
+        -o forgetting_to_improve/forgetful_bayesian_optimization/figures/ucb/
 
-    Multiple folders (combine results from different folders, per matching benchmark filename):
-    python -m forgetting_to_improve.forgetfull_bayesian_optimization.helper.plot_saved_results -f ./results/stable_baseline/ ./results/stable_baseline_other/ -o custom_figure_folder/
+    Several folders can be passed to merge methods stored in different
+    folders (matched per benchmark by file name).
 """
 
 import argparse
@@ -62,7 +66,7 @@ def main():
     if args.output:
         plot_path = args.output
     else:
-        plot_path = 'forgetting_to_improve/forgetfull_bayesian_optimization/figures/'
+        plot_path = str(Path(__file__).resolve().parents[1] / 'figures')
 
     Path(plot_path).mkdir(parents=True, exist_ok=True)
 

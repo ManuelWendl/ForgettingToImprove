@@ -1,14 +1,8 @@
-import os
-
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
 
-from .model import (
-    DeterministicPolicy,
-    GaussianPolicy,
-    QNetwork,
-)
+from .model import GaussianPolicy, QNetwork
 from .utils import hard_update, soft_update
 
 
@@ -44,19 +38,8 @@ class SAC(object):
                     ).item()
                 else:
                     self.target_entropy = args.target_entropy
-                # NOTE (2026-08-11): upstream pranz24 always starts log_alpha at 0 (alpha=1.0),
-                # ignoring args.alpha entirely whenever automatic_entropy_tuning is on -- so
-                # sac_alpha=0.2 in this project's config has never actually been the starting
-                # alpha in any run of the forgetful_rl cartpole investigation. Tried initializing
-                # from the configured value instead (full 5-seed validation): meaningfully
-                # reduced reward-curve variance on 3/5 seeds (std roughly halved on average,
-                # seed0 essentially stopped dipping at all) but seed1 became stably stuck at a
-                # low level (~19) rather than unstably reaching 200 -- not a uniform win. Also
-                # tried combining with random_initial_explore=True specifically to rescue seed1
-                # (hypothesized as complementary from each knob's standalone weak-point pattern):
-                # falsified, strictly worse than either alone (19 iterations stuck in single
-                # digits/teens, best recovery only 106.8, ends 62.0). Reverted to upstream's
-                # original behavior; see chat/memory for full data.
+                # As in upstream pytorch-soft-actor-critic, log_alpha starts at 0 (alpha = 1);
+                # args.alpha is only used without automatic entropy tuning.
                 self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
                 self.alpha_optim = Adam([self.log_alpha], lr=args.lr)
 
@@ -66,12 +49,7 @@ class SAC(object):
             self.policy_optim = Adam(self.policy.parameters(), lr=args.lr)
 
         else:
-            self.alpha = 0
-            self.automatic_entropy_tuning = False
-            self.policy = DeterministicPolicy(
-                num_inputs, action_space.shape[0], args.hidden_size, action_space
-            ).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=args.lr)
+            raise ValueError(f"Unsupported SAC policy '{self.policy_type}' (only 'Gaussian')")
 
     def select_action(self, state, batched=False, evaluate=False):
         state = torch.FloatTensor(state)
@@ -184,42 +162,3 @@ class SAC(object):
             alpha_loss.item(),
             alpha_tlogs.item(),
         )
-
-    # Save model parameters
-    def save_checkpoint(self, env_name=None, suffix="", ckpt_path=None):
-        if ckpt_path is None:
-            assert env_name is not None
-            if not os.path.exists("checkpoints/"):
-                os.makedirs("checkpoints/")
-            ckpt_path = "checkpoints/sac_checkpoint_{}_{}".format(env_name, suffix)
-        print("Saving models to {}".format(ckpt_path))
-        torch.save(
-            {
-                "policy_state_dict": self.policy.state_dict(),
-                "critic_state_dict": self.critic.state_dict(),
-                "critic_target_state_dict": self.critic_target.state_dict(),
-                "critic_optimizer_state_dict": self.critic_optim.state_dict(),
-                "policy_optimizer_state_dict": self.policy_optim.state_dict(),
-            },
-            ckpt_path,
-        )
-
-    # Load model parameters
-    def load_checkpoint(self, ckpt_path, evaluate=False):
-        print("Loading models from {}".format(ckpt_path))
-        if ckpt_path is not None:
-            checkpoint = torch.load(ckpt_path)
-            self.policy.load_state_dict(checkpoint["policy_state_dict"])
-            self.critic.load_state_dict(checkpoint["critic_state_dict"])
-            self.critic_target.load_state_dict(checkpoint["critic_target_state_dict"])
-            self.critic_optim.load_state_dict(checkpoint["critic_optimizer_state_dict"])
-            self.policy_optim.load_state_dict(checkpoint["policy_optimizer_state_dict"])
-
-            if evaluate:
-                self.policy.eval()
-                self.critic.eval()
-                self.critic_target.eval()
-            else:
-                self.policy.train()
-                self.critic.train()
-                self.critic_target.train()

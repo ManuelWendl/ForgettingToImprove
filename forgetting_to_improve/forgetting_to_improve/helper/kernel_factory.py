@@ -56,24 +56,6 @@ def create_kernel_from_config(kernel_config: List[dict], n_dims: int, fixed_kern
             
             kernels.append(k)
         
-        elif kernel_type == 'periodic':
-            length_scale = config.get('length_scale', 1.0)
-            period_length = config.get('period_length', 1.0)
-            if n_dims == 1:
-                k = gpytorch.kernels.PeriodicKernel()
-            else:
-                k = gpytorch.kernels.PeriodicKernel(ard_num_dims=n_dims)
-
-            if fixed_kernel:
-                if 'length_scale' in config:
-                    k.lengthscale = length_scale
-                    k.raw_lengthscale.requires_grad = False
-                if 'period_length' in config:
-                    k.period_length = period_length
-                    k.raw_period_length.requires_grad = False
-
-            kernels.append(k)
-
         elif kernel_type == 'linear' or kernel_type == 'dot_product':
             k = gpytorch.kernels.LinearKernel()
             kernels.append(k)

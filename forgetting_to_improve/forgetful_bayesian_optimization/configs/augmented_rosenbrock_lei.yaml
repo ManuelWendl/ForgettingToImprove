@@ -8,10 +8,9 @@ bayes_opt:
   acquisition_params: {}
   save_results: true
   plot_results: true
-  results_path: botorch_augmented_rosenbrock_lei_statistical.txt
+  results_path: lei/botorch_augmented_rosenbrock_lei_statistical.txt
   sample_optimization:
-    # algorithm: [none, joint, target_region, warped_gp, heteroscedastic_gp, relevance_pursuit, modulating_surrogates]
-    algorithm: [none, joint, target_region]
+    algorithm: [none, joint, warped_gp, relevance_pursuit]
     method: sequential 
     min_samples: 5
   kernel:

@@ -1,6 +1,6 @@
 import yaml
 from typing import Dict, Any, List, Union
-from ..objectives import sin_symmetric_lengthscale_increase, sin_asymmetric_lengthscale_increase, sin_periodic_lengthscale_increase, sin_symmetric_periodic, sin_symmetric_periodic_mismatch
+from ..objectives import sin_symmetric_lengthscale_increase, sin_asymmetric_lengthscale_increase
 
 class ConfigLoader:
     """Load and parse configuration files for GP experiments."""
@@ -9,9 +9,6 @@ class ConfigLoader:
         self.objective_functions = {
             'sin_symmetric_lengthscale_increase': sin_symmetric_lengthscale_increase,
             'sin_asymmetric_lengthscale_increase': sin_asymmetric_lengthscale_increase,
-            'sin_periodic_lengthscale_increase': sin_periodic_lengthscale_increase,
-            'sin_symmetric_periodic': sin_symmetric_periodic,
-            'sin_symmetric_periodic_mismatch': sin_symmetric_periodic_mismatch
         }
         
         # Available datasets
@@ -52,7 +49,7 @@ class ConfigLoader:
         
         # Parse methods
         methods = self._parse_list_or_single(experiment.get('method', 'none'))
-        valid_methods = ['none', 'sequential', 'batch', 'targetSampling', 'sequentialPerKernel', 'batchPerKernel', 'relevance_pursuit', 'warped_gp', 'heteroscedastic_gp']
+        valid_methods = ['none', 'sequential', 'batch', 'targetSampling', 'relevance_pursuit', 'warped_gp', 'heteroscedastic_gp']
         for method in methods:
             if method not in valid_methods:
                 raise ValueError(f"Invalid method: {method}. Must be one of {valid_methods}")
@@ -74,7 +71,7 @@ class ConfigLoader:
         
         # Parse noise types
         noises = self._parse_list_or_single(experiment.get('noise', 'joint'))
-        valid_noises = ['joint', 'epistemic', 'aleatoric', 'aleatoric_scaled']
+        valid_noises = ['joint', 'epistemic', 'aleatoric']
         for noise in noises:
             if noise not in valid_noises:
                 raise ValueError(f"Invalid noise type: {noise}. Must be one of {valid_noises}")
@@ -93,16 +90,10 @@ class ConfigLoader:
         # Parse kernel configuration
         kernel_config = experiment.get('kernel', None)
 
-        # Parse an optional Gamma noise-prior concentration sweep for the
-        # curvature analysis (Section M / Figure 25 of the paper):
-        # `gamma_prior_a` may be a single value or a list to sweep (e.g. [1,
-        # 2, 5, 10, 20, 50, 100, 200]). `gamma_prior_b` is not the rate -- to
-        # keep the sweep isolated to concentration, evaluate() reads it as
-        # the target noise-prior MEAN to hold fixed across every `a` in the
-        # sweep, deriving the actual rate per-a as b = a / gamma_prior_b (see
-        # evaluate.py). Left unset (None), evaluate() falls back to its
-        # self-calibrating default prior -- existing configs that don't
-        # mention this are unaffected.
+        # Optional Gamma noise-prior concentration sweep (curvature ablation):
+        # `gamma_prior_a` is a value or a list; `gamma_prior_b` is the prior MEAN
+        # held fixed across the sweep (rate = a / gamma_prior_b, see evaluate.py).
+        # Unset: the default prior is used.
         gamma_prior_a_raw = experiment.get('gamma_prior_a', None)
         gamma_prior_b_raw = experiment.get('gamma_prior_b', None)
         gamma_prior_a_values = (
@@ -128,15 +119,13 @@ class ConfigLoader:
             'num_A_samples': experiment.get('num_A_samples', 50),
             'fixed_kernel': experiment.get('fixed_kernel', True),
             'show_plots': experiment.get('show_plots', False),
-            'show_hessian': experiment.get('show_hessian', False),
-            'compare_optimal': experiment.get('compare_optimal', False),
             'calculate_convexity': experiment.get('calculate_convexity', False),
             'removal_threshold': experiment.get('removal_threshold', 0.0),
             'map_noise': experiment.get('map_noise', False),
+            'noise_init': experiment.get('noise_init', 'config'),
             'feature_subset': experiment.get('feature_subset', None),
             'kernel_config': kernel_config,
             'gp_alpha': experiment.get('gp_alpha', 0.01),
-            'per_kernel_removal_strategy': experiment.get('per_kernel_removal_strategy', 'one_per_kernel'),
             'gamma_prior_a_values': gamma_prior_a_values,
             'gamma_prior_b_values': gamma_prior_b_values,
         }

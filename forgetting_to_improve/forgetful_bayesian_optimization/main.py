@@ -1,5 +1,10 @@
 import argparse
 import os
+
+# Outputs are written next to this package: results/ and figures/
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(PACKAGE_DIR, 'results')
+FIGURES_DIR = os.path.join(PACKAGE_DIR, 'figures')
 from .helper.read_config import read_config, get_acquisition_config, get_optimization_config, get_perturbation_config, validate_config
 from .run_experiment import run_experiment
 from .helper.plotting import plot_results
@@ -27,7 +32,8 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
     print(f"Initial points: {config.get('init_points', 0)}")
     print("=" * 80)
 
-    # handle special CSV-based AutoML benchmark
+    # AutoML CSV benchmark (objective 'automl_csv:<path>'): one continuous BO run over
+    # all tasks (data_id) of the table, n_iter iterations per task
     if isinstance(config['objective'], str) and config['objective'].startswith('automl_csv:'):
         # path follows the colon
         csv_path = config['objective'].split(':', 1)[1]
@@ -134,12 +140,13 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
             # save/plot as in normal path
             if config.get('save_results', False):
                 results_path = config.get('results_path', 'experiment_results.txt')
-                out_path = f"forgetting_to_improve/forgetfull_bayesian_optimization/results/{results_path}"
+                out_path = os.path.join(RESULTS_DIR, results_path)
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
                 print(f"\nSaving results to {out_path}...")
                 save_results(results, config, out_path)
                 save_learning_history(results, config, out_path)
             if config.get('plot_results', False):
-                plot_path = 'forgetting_to_improve/forgetfull_bayesian_optimization/figures/'
+                plot_path = FIGURES_DIR + '/'
                 print("\nCreating plots for continuous CSV experiment...")
                 plot_results(results, config, plot_path)
 
@@ -201,7 +208,8 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
     # Save results if requested
     if config.get('save_results', False):
         results_path = config.get('results_path', 'experiment_results.txt')
-        results_path = 'forgetting_to_improve/forgetfull_bayesian_optimization/results/' + results_path
+        results_path = os.path.join(RESULTS_DIR, results_path)
+        os.makedirs(os.path.dirname(results_path), exist_ok=True)
         print(f"\nSaving results to {results_path}...")
         save_results(results, config, results_path)
         # Save complete learning history for plotting
@@ -209,7 +217,7 @@ def run_bayesian_optimization_experiment(config_path: str) -> None:
     
     # Plot results if requested
     if config.get('plot_results', False):
-        plot_path = 'forgetting_to_improve/forgetfull_bayesian_optimization/figures/'
+        plot_path = FIGURES_DIR + '/'
         print("\nCreating plots...")
         plot_results(results, config, plot_path)
     

@@ -1,5 +1,4 @@
-import pathlib
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -43,7 +42,7 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
 
 
 class GPModel(nn.Module):
-    """Gaussian Process dynamics model compatible with ensemble model interface."""
+    """Gaussian process dynamics model (multi-output GP over the next state, optionally the reward)."""
     
     def __init__(
         self,
@@ -68,13 +67,9 @@ class GPModel(nn.Module):
         self.deterministic = deterministic
         self.target_is_delta = target_is_delta
         self.max_train_size = max_train_size
-        # When False, the GP only predicts state deltas (out_size == obs_size, no
-        # trailing reward column) -- reward is instead computed analytically from the
-        # predicted next state by the caller's reward_fn (see algorithm/mbpo.py). This
-        # keeps reward -- which can be (near-)constant or otherwise poorly explained by
-        # a linear kernel, see the forgetful_rl filtering diagnostics -- out of both the
-        # model's own output space and the forgetting filter entirely, rather than
-        # trying to special-case it there.
+        # learn_reward=False: the GP predicts the state only (no reward column); the
+        # reward is computed from the predicted next state by the caller's reward_fn
+        # (see algorithm/mbpo.py), and the forgetting filter does not see it.
         self.learn_reward = learn_reward
         self.kernel_type = kernel_type
         self.noise_prior_shape = noise_prior_shape
@@ -156,8 +151,7 @@ class GPModel(nn.Module):
                 next_obs = preds_np[:, :-1]
                 rewards = preds_np[:, -1:]
             else:
-                # All output columns are state deltas; caller (mbpo.py) computes
-                # reward analytically from (action, next_obs) via reward_fn.
+                # All outputs are state dimensions; mbpo.py computes the reward via reward_fn
                 next_obs = preds_np
                 rewards = None
             if self.target_is_delta:
@@ -282,12 +276,8 @@ class GPModel(nn.Module):
         self.gp_model.train()
         self.likelihood.train()
         
-        # GP models manage their own optimizer (mbpo.py's externally-built `model_optimizer`
-        # is None here, since dynamics_model.parameters() is empty before self.gp_model exists
-        # -- see mbpo.py's "Create optimizer only if model has parameters" comment). The GP's
-        # own params/likelihood are also recreated fresh above every call, so the optimizer
-        # must be rebuilt here regardless -- but it now honors model_lr (from
-        # cfg.overrides.model_lr, threaded through explicitly) instead of a hardcoded 0.01.
+        # The GP and likelihood are recreated in every call, so the optimizer is
+        # built here (learning rate and weight decay from cfg.overrides).
         optimizer = torch.optim.Adam(
             list(self.gp_model.parameters()) + list(self.likelihood.parameters()),
             lr=model_lr,

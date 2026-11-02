@@ -1,0 +1,15 @@
+# @package _global_.dynamics_model
+# GP dynamics model used for cartpole swingup (DeepMind Control): Matern kernel
+# on normalized inputs, predicting state differences (next state - state).
+# Select with `dynamics_model=gp_model_matern`.
+_target_: forgetting_to_improve.forgetful_rl.model.gp_model.GPModel
+device: ${device}
+in_size: ???
+out_size: ???
+deterministic: false
+target_is_delta: true
+normalize: true
+max_train_size: 2500
+kernel_type: 'matern'  # 'linear' | 'matern' | 'rbf'
+noise_prior_shape: 500
+noise_prior_rate: 50

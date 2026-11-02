@@ -1,0 +1,30 @@
+experiment:
+  # Single run (one seed) that sweeps the Gamma noise-prior concentration `a`
+  # and tracks the restricted curvature during removal for each value.
+  type: single
+  method: sequential
+  objective: twitter
+  noise: joint
+  A_limits: [0.25, 1.0]
+  X_limits: [-0.25, 1.0]
+  num_samples: 405
+  num_train_samples: 50
+  num_A_samples: 80
+  seed: 5
+  fixed_kernel: true
+  show_plots: true
+  calculate_convexity: true
+  map_noise: true
+  removal_threshold: 0.01
+
+  # Gamma noise prior: concentrations a to sweep; gamma_prior_b is the prior
+  # MEAN held fixed across the sweep (rate = a / gamma_prior_b).
+  gamma_prior_a: [1.1, 5, 10, 50, 100]
+  gamma_prior_b: 0.15
+
+  kernel:
+  - type: 'matern'
+    nu: 2.5
+    length_scale: 1
+  - type: white
+    noise_level: 0.2

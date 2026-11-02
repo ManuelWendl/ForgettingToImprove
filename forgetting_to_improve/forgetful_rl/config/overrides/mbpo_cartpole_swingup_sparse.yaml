@@ -1,18 +1,18 @@
 # @package _global_.overrides
+# Cartpole swingup (DeepMind Control). Not part of the paper experiments.
+# Run with: overrides=mbpo_cartpole_swingup_sparse dynamics_model=gp_model_matern
 env: "dmc___cartpole___swingup"
 exp_name: "mbpo_cartpole_swingup"
 project_name: "forgetful_rl"
 seed: 0
-trial_length: 1000  # Standard DMC episode length
-action_repeat: 5  # Action repeat / frame-skip for DMC envs (set to 1 to disable)
+trial_length: 1000  # DMC episode length (physics steps)
+action_repeat: 5  # each action is repeated for 5 physics steps
 
-# --- use custom sparse reward instead of the default DMC return ---
-learned_rewards: false          # disable learned reward so our function is used
+# Sparse reward (env/reward_fns.py) instead of the DMC reward
+learned_rewards: false
 reward_fn: "cartpole_swingup_sparse"
-# angle window around upright (radians)
-sparse_threshold: 0.25           # angular radius (radians) around upright
-# optionally require the cart to stay near the origin as well
-sparse_x_threshold: 0.5          # max |x| for reward (same units as DMC state)
+sparse_threshold: 0.25           # max angle from upright (radians)
+sparse_x_threshold: 0.5          # max |x| of the cart
 
 # Forgetful settings
 forgetful_rl: true
@@ -23,8 +23,8 @@ forgetful_rl_max_samples: 5000  # Maximum samples to process (subsample if large
 forgetful_rl_batch_optimize: true  # Whether to optimize in batches (for large sample sizes)
 
 max_model_buffer_size: 5000  # Maximum size of replay buffer for model training (keeps most recent)
-num_steps: 25000  # Total steps (50 episodes × 1000 steps)
-epoch_length: 1000  # Steps per epoch (1 episode per epoch)
+num_steps: 25000
+epoch_length: 1000
 num_elites: 5
 patience: 5
 model_lr: 0.001

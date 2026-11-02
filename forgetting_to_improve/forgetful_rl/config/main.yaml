@@ -1,6 +1,6 @@
 defaults:
   - algorithm: mbpo
-  - dynamics_model: ensemble_model
+  - dynamics_model: gp_model
   - overrides: mbpo_cartpole
   - _self_
 
@@ -11,6 +11,14 @@ save_video: false
 debug_mode: false
 
 experiment: default
+
+# Weights & Biases logging. Every run also writes its metrics to
+# <run dir>/results.jsonl, which the plotting scripts read, so wandb is optional.
+# offline: log locally (sync later with `wandb sync`); online: needs an account.
+wandb:
+  mode: offline  # online | offline | disabled
+  entity: null
+  project: ${overrides.project_name}
 
 root_dir: "./exp"
 hydra:

@@ -1,0 +1,27 @@
+experiment:
+  type: single
+  method: [none, sequential]
+  objective: sin_asymmetric_lengthscale_increase
+  noise: joint
+  A_limits: [-3, 3]
+  X_limits: [-10, 10]
+  num_samples: 1000
+  num_train_samples: 20
+  num_A_samples: 50
+  seed: 5
+  fixed_kernel: true
+  show_plots: true
+  kernel:
+    - type: jacobian
+      hidden: 40
+      depth: 2
+      activation: relu   # tanh | relu | gelu | silu | elu | leaky_relu | sigmoid | softplus
+      last_layer: true
+      epochs: 500
+      lr: 0.01
+      prior_prec: 1.0
+      retrain_mode: finetune   # finetune (continue from theta*) | scratch (re-init weights first)
+      finetune_epochs: 500   # re-fit the MLP on the reduced set after each removal
+      finetune_lr: 0.01
+    - type: white
+      noise_level: 0.1

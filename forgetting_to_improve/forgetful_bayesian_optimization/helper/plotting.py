@@ -1,8 +1,8 @@
 """
 Plotting utilities for Bayesian Optimization results.
 
-This module provides functions to visualize optimization results,
-including objective function contours, sampled points, and regret plots.
+Simple regret, cumulative regret and best-value curves (mean ± std over
+seeds) and runtime bar plots, for single and combined experiments.
 """
 
 import numpy as np
@@ -26,10 +26,8 @@ def _apply_iclr_style(usetex: bool = False):
     """Apply ICLR 2023 styling to matplotlib.
 
     Args:
-        usetex: If True, render text with a real LaTeX install instead of
-            matplotlib's mathtext. Used for the jacobian/NN-kernel (LLL)
-            comparison plots, whose labels include LaTeX-only constructs;
-            defaults to False elsewhere to avoid requiring a LaTeX install.
+        usetex: If True, render text with LaTeX (used for the NN-kernel plots)
+            instead of matplotlib's mathtext.
     """
     theme = bundles.iclr2023()
     plt.rcParams.update(axes_style("white"))
@@ -136,6 +134,16 @@ def _method_label(method: str, config=None, newline: bool = False) -> str:
         return base.replace(' ', '\n') if newline else base
     if method == 'joint':
         return 'Forgetful LLL' if nn else 'Forgetful BO'
+    baseline_labels = {
+        'warped_gp': 'Warped GP',
+        'relevance_pursuit': 'Relevance Pursuit',
+        'trimmed_mll': 'Trimmed MLL',
+        'student_t': 'Student-t',
+        'target_region': 'Target Region',
+    }
+    if method in baseline_labels:
+        label = baseline_labels[method]
+        return label.replace(' ', '\n') if newline else label
     return method.capitalize().replace('_', '\n' if newline else ' ')
 
 
@@ -214,7 +222,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/simple_regret_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/simple_regret_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot cumulative regret
@@ -257,7 +265,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/cumulative_regret_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/cumulative_regret_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot best values
@@ -302,7 +310,7 @@ def plot_results(results: Dict[str, Any], config: Dict[str, Any], plot_path: str
     ax.set_title(f"{config['objective'].replace('_', ' ').replace('botorch ', '').title()} - {config['acquisition']}")
     ax.legend(frameon=False)
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/best_values_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/best_values_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Plots saved to {plot_path}")
@@ -316,9 +324,8 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
         all_data: List of data dictionaries, each containing 'results' and 'config'
         plot_path: Directory path to save plots
     """
-    # Use a NN-kernel (jacobian) config, if any experiment in the comparison
-    # has one, both to pick method labels and to switch on real LaTeX
-    # rendering for the jacobian comparison plots.
+    # If any experiment uses the NN (jacobian) kernel, use its config for the
+    # method labels and render text with LaTeX.
     rep_config = next((d['config'] for d in all_data if _uses_nn_kernel(d['config'])), None)
 
     # Apply ICLR 2023 styling
@@ -428,7 +435,7 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
     
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.1)
-    plt.savefig(f"{plot_path}/combined_simple_regret.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/combined_simple_regret.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Plot 2: Cumulative Regret ---
@@ -491,7 +498,7 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
            handletextpad=0.5)    # Less space between line and text
     
     plt.tight_layout()
-    plt.savefig(f"{plot_path}/combined_cumulative_regret.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/combined_cumulative_regret.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Plot 3: Best Values ---
@@ -552,7 +559,7 @@ def plot_multiple_results(all_data: list, plot_path: str) -> None:
     
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.1)
-    plt.savefig(f"{plot_path}/combined_best_values.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/combined_best_values.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Combined plots saved to {plot_path}")
@@ -679,7 +686,7 @@ def plot_runtime_statistics(results: Dict[str, Any], config: Dict[str, Any], plo
                  y=1.02, fontsize=12)
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.15)
-    plt.savefig(f"{plot_path}/runtime_statistics_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
+    plt.gcf().savefig(f"{plot_path}/runtime_statistics_{safe_obj}{suffix}.pdf", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Runtime statistics plot saved to {plot_path}")
@@ -693,9 +700,8 @@ def plot_multiple_runtime_statistics(all_data: list, plot_path: str) -> None:
         all_data: List of data dictionaries, each containing 'results' and 'config'
         plot_path: Directory path to save plots
     """
-    # Use a NN-kernel (jacobian) config, if any experiment in the comparison
-    # has one, both to pick method labels and to switch on real LaTeX
-    # rendering for the jacobian comparison plots.
+    # If any experiment uses the NN (jacobian) kernel, use its config for the
+    # method labels and render text with LaTeX.
     rep_config = next((d['config'] for d in all_data if _uses_nn_kernel(d['config'])), None)
 
     # Apply ICLR 2023 styling
@@ -810,158 +816,7 @@ def plot_multiple_runtime_statistics(all_data: list, plot_path: str) -> None:
         
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.12)
-        plt.savefig(f"{plot_path}/combined_runtime_{stat_type}.pdf", dpi=300, bbox_inches='tight')
+        plt.gcf().savefig(f"{plot_path}/combined_runtime_{stat_type}.pdf", dpi=300, bbox_inches='tight')
         plt.close()
 
     print(f"Combined runtime statistics plots saved to {plot_path}")
-
-
-def plot_combined_simple_and_cumulative(all_data: list, plot_path: str) -> None:
-    """
-    Plot a single figure with side-by-side simple regret and cumulative regret
-    curves using transfer vs single-task method groups.
-    """
-    _apply_iclr_style()
-    # Enable real LaTeX rendering for this figure (requires a LaTeX install
-    # with dvipng on the machine actually generating the plot).
-    plt.rcParams.update({"text.usetex": True})
-    Path(plot_path).mkdir(parents=True, exist_ok=True)
-    colors = _get_color_palette()
-
-    if not all_data:
-        return
-
-    # For multi-file merge (all_files mode), all_data usually has one combined dict
-    data = all_data[0]
-    results = data['results']
-
-    transfer_mapping = {
-        'Forgetful BO (transfer)': 'joint_automl_allbenchmarks3',
-        'Homoscedastic GP (transfer)': 'none_automl_allbenchmarks3',
-        'Warped GP (transfer)': 'warped_gp_automl_allbenchmarks3',
-        'Relevance Pursuit (transfer)': 'relevance_pursuit_automl_allbenchmarks_relevance',
-    }
-    single_task_mapping = {
-        'Homoscedastic GP (single)': 'none_automl_allbenchmarks_perbench',
-        'Warped GP (single)': 'warped_gp_automl_allbenchmarks_perbench',
-        'Relevance Pursuit (single)': 'relevance_pursuit_automl_allbenchmarks_perbench',
-    }
-
-    fig_width = figsizes.neurips2024(nrows=1, ncols=2)['figure.figsize'][0]
-    fig_height = figsizes.neurips2024(nrows=1, ncols=2)['figure.figsize'][1]
-
-    fig, axes = plt.subplots(1, 2, figsize=(fig_width, fig_height), sharey=False)
-    ax_simple, ax_cum = axes
-
-    # determine actual keys that exist in results
-    valid_transfer = {name: key for name, key in transfer_mapping.items() if key in results}
-    valid_single = {name: key for name, key in single_task_mapping.items() if key in results}
-
-    # plot function that stores handles for legend
-    from matplotlib.lines import Line2D
-    method_handles = {}
-
-    def plot_methods(ax, stat_key, mapping):
-        _style_axis(ax)
-        for idx, (label, key) in enumerate(mapping.items()):
-            mean = np.array(results[key][stat_key]['mean'])
-            std = np.array(results[key][stat_key]['std'])
-            n = len(mean)
-            x = np.arange(1, n + 1)
-            color = colors['method_colors'][idx % len(colors['method_colors'])]
-            if stat_key == 'simple_regret':
-                line, = ax.semilogy(x, mean, color=color, linewidth=2, label=label)
-                lower = np.maximum(mean - std, 1e-8)
-                upper = mean + std
-                ax.fill_between(x, lower, upper, color=color, alpha=0.2, linewidth=0)
-            else:
-                line, = ax.plot(x, mean, color=color, linewidth=2, label=label)
-                lower = mean - std
-                upper = mean + std
-                ax.fill_between(x, lower, upper, color=color, alpha=0.2, linewidth=0)
-
-            if label not in method_handles:
-                method_handles[label] = line
-
-        ax.set_xlabel('Iteration $t$')
-        if stat_key == 'simple_regret':
-            ax.set_ylabel('Simple Regret')
-            ax.set_yscale('log')
-            ax.set_ylim(bottom=1e-4)
-            formatter = ticker.ScalarFormatter(useMathText=True)
-            formatter.set_powerlimits((-3, 3))
-            ax.yaxis.set_major_formatter(formatter)
-        else:
-            ax.set_ylabel('Cumulative Regret')
-            ax.set_ylim(0, 6)
-
-    # Determine task-switch boundaries for vertical shading lines
-    task_switch_positions = []
-    first_per_task_method = None
-    for method_name, method_stats in results.items():
-        if 'per_task' in method_stats and method_stats['per_task']:
-            first_per_task_method = method_name
-            break
-
-    if first_per_task_method is not None:
-        per_task = results[first_per_task_method]['per_task']
-        # Preserve insertion order; fallback to sorted keys if necessary
-        task_ids = list(per_task.keys())
-
-        try:
-            task_lengths = [len(per_task[tid]['simple_regret']['mean']) for tid in task_ids]
-            cum_lengths = np.cumsum(task_lengths)
-            # line at the start of each new task (after previous task ends)
-            task_switch_positions = [float(x) + 0.5 for x in cum_lengths[:-1]]
-        except Exception:
-            task_switch_positions = []
-
-    # swap order: right plot will be simple regret and left will be cumulative regret
-    plot_methods(ax_simple, 'cumulative_regret', {**valid_transfer, **valid_single})
-    plot_methods(ax_cum, 'simple_regret', {**valid_transfer, **valid_single})
-
-    # Add vertical lines at task switches in both subplots
-    if task_switch_positions:
-        for ax in (ax_simple, ax_cum):
-            for x in task_switch_positions:
-                ax.axvline(x=x, color='gray', linestyle='--', linewidth=1, alpha=0.5, zorder=1)
-
-    # Build grouped legend as three rows in one column:
-    # - first row: Transfer header
-    # - second row: Transfer entries (if any)
-    # - third row: Single task header + entries
-    legend_handles = []
-    legend_labels = []
-
-    if valid_transfer:
-        # header row for transfer (bold)
-        legend_handles.append(Line2D([], [], color='none'))
-        legend_labels.append(r'$\bf{Transfer}$')
-        # transfer entries
-        for label in valid_transfer.keys():
-            if label in method_handles:
-                legend_handles.append(method_handles[label])
-                legend_labels.append(label)
-
-    if valid_single:
-        # header row for single task (bold)
-        legend_handles.append(Line2D([], [], color='none'))
-        legend_labels.append(r'$\bf{Single\ task}$')
-        for label in valid_single.keys():
-            if label in method_handles:
-                legend_handles.append(method_handles[label])
-                legend_labels.append(label)
-
-    fig.legend(handles=legend_handles, labels=legend_labels,
-               loc='center left', ncol=2,
-               frameon=False, bbox_to_anchor=(0.15, 1.2),
-               handlelength=2, handletextpad=1.0, columnspacing=5.0)
-
-    # Remove subplot titles
-    ax_simple.set_title('')
-    ax_cum.set_title('')
-
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.25)
-    plt.savefig(f"{plot_path}/combined_simple_cumulative.pdf", dpi=300, bbox_inches='tight')
-    plt.close()

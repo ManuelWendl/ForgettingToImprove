@@ -1,0 +1,28 @@
+experiment:
+  type: single
+  method: [none, sequential]
+  objective: twitter
+  noise: joint
+  A_limits: [0.25, 0.9]
+  X_limits: [-0.25, 1.0]
+  num_samples: 405
+  num_train_samples: 50
+  num_A_samples: 80
+  seed: 5
+  fixed_kernel: true
+  show_plots: true
+  # Linearised-Laplace (Jacobian) NN kernel (as in laplax).
+  kernel:
+    - type: jacobian
+      hidden: 40
+      depth: 2
+      activation: relu   # tanh | relu | gelu | silu | elu | leaky_relu | sigmoid | softplus
+      last_layer: true
+      epochs: 1000
+      lr: 0.01
+      prior_prec: 1.0
+      retrain_mode: finetune   # finetune (continue from theta*) | scratch (re-init weights first)
+      finetune_epochs: 400   # re-fit the MLP on the reduced set after each removal
+      finetune_lr: 0.01
+    - type: white
+      noise_level: 0.1

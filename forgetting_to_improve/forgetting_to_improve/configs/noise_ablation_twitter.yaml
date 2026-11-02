@@ -1,0 +1,24 @@
+experiment:
+  # Noise ablation: joint vs aleatoric-only removal criterion (F2I only), same
+  # benchmark as twitter.yaml but with the initial GP noise from the kernel
+  # config (white noise_level).
+  type: statistic
+  method: sequential
+  objective: twitter
+  noise: [joint, aleatoric]
+  A_limits: [0.75, 1]
+  X_limits: [-1.5, 1.5]
+  num_samples: 405
+  num_train_samples: 75
+  num_A_samples: 80
+  seed: 100  # seeds 0-99
+  fixed_kernel: false
+  noise_init: config  # initial GP noise = white noise_level below
+  show_plots: false
+  feature_subset: null
+  kernel:
+    - type: 'matern'
+      nu: 2.5
+      length_scale: 0.1
+    - type: white
+      noise_level: 0.2

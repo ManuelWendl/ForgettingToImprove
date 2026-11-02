@@ -1,22 +1,19 @@
-# @package _group_
+# @package _global_.overrides
 env: "cartpole_continuous"
 exp_name: "mbpo_cartpole"
 project_name: "forgetful_rl"
 seed: 0
 trial_length: 200
-learned_rewards: false  # reward is computed analytically from predicted next state
-                         # (reward_fns.cartpole) instead of being a GP output -- see
-                         # algorithm/mbpo.py's learn_reward wiring
+learned_rewards: false  # reward computed from the predicted next state (reward_fns.cartpole)
 
 # Forgetful settings
 forgetful_rl: true
 forgetful_rl_num_initial_samples: 100  # For target region computation
 forgetful_rl_max_iter: 500  # Max iterations for sample filtering
-forgetful_rl_noise_type: "joint"  # Type of uncertainty: 'joint', 'epistemic', 'aleatoric'
+forgetful_rl_noise_type: "joint"  # 'joint', 'epistemic', 'aleatoric' (sequential removal only; batch uses joint)
 forgetful_rl_max_samples: 2500  # Maximum samples to process (subsample if larger to avoid OOM)
 forgetful_rl_batch_optimize: true  # Whether to optimize in batches (for large sample sizes)
-# Whether to keep track of which samples were removed/kept during filtering.
-# This can consume a lot of memory and winds up logging large tables to WandB.
+# Save the kept/removed samples of every filtering step (memory-heavy)
 store_data_removal: false
 
 max_model_buffer_size: 2500  # Maximum size of replay buffer for model training (keeps most recent)

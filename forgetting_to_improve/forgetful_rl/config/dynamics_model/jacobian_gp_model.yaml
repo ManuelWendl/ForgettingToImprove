@@ -1,0 +1,22 @@
+# @package _global_.dynamics_model
+# Shared-trunk jacobian (last-layer Laplace) dynamics model: select with
+# `dynamics_model=jacobian_gp_model` on the command line (the default is
+# gp_model, see config/main.yaml).
+_target_: forgetting_to_improve.forgetful_rl.model.jacobian_model.JacobianGPModel
+device: ${device}
+in_size: ???
+out_size: ???
+deterministic: false
+target_is_delta: true
+normalize: true
+max_train_size: 1000
+hidden: 64
+depth: 4
+activation: 'relu'   # tanh | relu | gelu | silu | elu | leaky_relu | sigmoid | softplus
+last_layer: true
+prior_prec: 1.0
+epochs: 200           # initial shared-trunk (theta*) fit, once per train_model call
+lr: 0.01
+retrain_mode: finetune   # finetune (continue from theta*) | scratch (re-init weights first)
+finetune_epochs: 200     # deferred, single joint trunk refit after forgetting -- see
+finetune_lr: 0.01        # JacobianGPModel.finetune_shared_trunk / filter_samples.py

@@ -1,12 +1,15 @@
 # @package _global_.dynamics_model
+# GP dynamics model used for the cartpole-balance experiments in the paper:
+# linear kernel on raw (unnormalized) states, predicting the next state
+# directly, with a concentrated Gamma(500, 50) noise prior (mean 10).
 _target_: forgetting_to_improve.forgetful_rl.model.gp_model.GPModel
 device: ${device}
 in_size: ???
 out_size: ???
 deterministic: false
-target_is_delta: true # false
-normalize: true # false
-max_train_size: 2500  
-kernel_type: 'matern'  # 'linear'
+target_is_delta: false
+normalize: false
+max_train_size: 2500
+kernel_type: 'linear'  # 'linear' | 'matern' | 'rbf'
 noise_prior_shape: 500
 noise_prior_rate: 50

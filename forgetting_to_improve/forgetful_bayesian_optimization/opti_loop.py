@@ -11,9 +11,8 @@ from .filter_samples import filter_samples
 from .baseline_models import (
     initialize_relevance_pursuit_model,
     initialize_warped_gp_model,
-    initialize_heteroscedastic_gp_model,
-    initialize_modulating_surrogates_model,
-    create_mc_latent_acquisition
+    initialize_trimmed_mll_model,
+    initialize_student_t_gp_model,
 )
 
 def get_optimization_loop(
@@ -41,7 +40,8 @@ def get_optimization_loop(
         rolling_window = None
 
     # Check if using baseline method
-    is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'heteroscedastic_gp', 'modulating_surrogates']
+    is_baseline_method = algorithm in ['relevance_pursuit', 'warped_gp', 'trimmed_mll', 'student_t']
+    # AutoML CSV benchmark only: start each new task from fresh samples
     reset_per_task = opti_options.get('reset_per_task', False) if opti_options else False
 
     # Setup perturbation if configured
@@ -61,12 +61,8 @@ def get_optimization_loop(
 
     def optimization_loop(num_iters, seed):
         """Runs the Bayesian optimization loop."""
-        # `seed` was previously only threaded into draw_sobol_samples (initial
-        # design / target-region grid). The jacobian kernel's MLP weight init
-        # (and every full-MLP retrain inside filter_samples' 'joint' loop) draws
-        # from torch's global RNG, which was never seeded -- so "seed i" was not
-        # actually reproducible, and re-running an identical config could flip
-        # which method won. Seeding here makes the whole loop deterministic.
+        # Seed torch's global RNG (used e.g. by the NN-kernel MLP initialization)
+        # so that every (method, seed) run is reproducible.
         torch.manual_seed(seed)
 
         # Normalize bounds to [0, 1] hypercube for consistent GP priors
@@ -93,7 +89,6 @@ def get_optimization_loop(
                     if perturbation_type == 'constant':
                         # Apply constant value perturbation
                         obj_values[corruption_mask] = perturbation_value
-                    # Add other perturbation types here if needed (uniform, random_point, etc.)
             
             return obj_values
         
@@ -109,7 +104,7 @@ def get_optimization_loop(
             bounds=normalized_bounds, n=n_initial_samples, q=1, seed=seed
         ).squeeze(1)
 
-        # Set iteration for CSV benchmark (if applicable)
+        # AutoML CSV benchmark: select the task of iteration 0
         if hasattr(obj, 'set_iteration'):
             obj.set_iteration(0)
 
@@ -119,9 +114,9 @@ def get_optimization_loop(
         best_observed = [best_observed_value]
         train_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
 
-        # Track current task for continual learning scenarios
+        # Current task (AutoML CSV benchmark only) and running best on it
         current_task = getattr(obj, 'current_task', None)
-        running_best = best_observed_value  # Running best for current task
+        running_best = best_observed_value
         previous_model_state = None
 
         # Initial model - pass normalized bounds
@@ -135,7 +130,7 @@ def get_optimization_loop(
         for i in range(1, num_iters + 1):
             iteration_start_time = time.time()
 
-            # Set iteration for CSV benchmark (if applicable)
+            # AutoML CSV benchmark: switch to the task of this iteration
             if hasattr(obj, 'set_iteration'):
                 obj.set_iteration(i)
                 # Check if task changed - reset running best if so
@@ -165,9 +160,6 @@ def get_optimization_loop(
                         train_obj = exact_obj + obs_noise * torch.randn_like(exact_obj)
                         running_best = exact_obj.max().item()
 
-                        # No previous task samples should be used going forward
-                        # Model will be re-initialized by the algorithm branch below
-
             # Handle baseline methods
             if algorithm == 'relevance_pursuit':
                 # Create fresh kernel for each iteration
@@ -184,42 +176,42 @@ def get_optimization_loop(
                 )
             
             elif algorithm == 'warped_gp':
-                # Reinitialize with warped GP - pass None for kernel to create fresh one with same priors
+                # Reinitialize with warped GP (fresh kernel)
                 noise_level = obs_noise if obs_noise > 0 else 0.1
                 mll, model = initialize_warped_gp_model(
                     train_x=train_x,
                     train_y=standardize(train_obj),
-                    kernel=None,  # Create fresh kernel, don't use pre-optimized one
+                    kernel=None,
                     noise_level=noise_level,
                     device=train_x.device,
                     global_bounds=normalized_bounds
                 )
             
-            elif algorithm == 'heteroscedastic_gp':
-                # Create fresh kernel for each iteration
-                n_dims = train_x.shape[-1]
-                fresh_kernel = gpytorch.kernels.ScaleKernel(
-                    gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=n_dims)
-                )
-                # Reinitialize with heteroscedastic GP
-                mll, model = initialize_heteroscedastic_gp_model(
-                    train_x=train_x,
-                    train_y=standardize(train_obj),
-                    mean_kernel=fresh_kernel,
-                    device=train_x.device
-                )
-            
-            elif algorithm == 'modulating_surrogates':
-                # Reinitialize with modulating surrogates GP
+            elif algorithm == 'trimmed_mll':
+                # Reinitialize with trimmed MLL GP
                 noise_level = obs_noise if obs_noise > 0 else 0.1
-                mll, model = initialize_modulating_surrogates_model(
+                mll, model = initialize_trimmed_mll_model(
                     train_x=train_x,
                     train_y=standardize(train_obj),
                     kernel=None,
                     noise_level=noise_level,
-                    device=train_x.device
+                    device=train_x.device,
+                    max_outlier_fraction=0.5,
+                    max_iterations=50
                 )
-            
+
+            elif algorithm == 'student_t':
+                # Reinitialize with Student-t GP
+                noise_level = obs_noise if obs_noise > 0 else 0.1
+                mll, model = initialize_student_t_gp_model(
+                    train_x=train_x,
+                    train_y=standardize(train_obj),
+                    kernel=None,
+                    noise_level=noise_level,
+                    device=train_x.device,
+                    degrees_of_freedom=3.0
+                )
+
             # Handle forgetting-based methods
             elif algorithm in ['joint', 'epistemic']:
                 target_region = TargetRegion(normalized_bounds, num_initial_points=num_target_region_samples, seed=seed, iteration=i)
@@ -276,8 +268,8 @@ def get_optimization_loop(
                 # No special handling (algorithm == 'none')
                 mll, model = initialize_model(train_x, standardize(train_obj), normalized_bounds)
 
-            # If we're resetting each task, load previous kernel/hyperparams
-            # to preserve learned structures across tasks while dropping samples.
+            # After a task reset, reload the previous kernel/hyperparameters
+            # (only the samples are dropped)
             if reset_per_task and previous_model_state is not None and model is not None:
                 if hasattr(model, 'load_state_dict'):
                     try:
@@ -286,37 +278,22 @@ def get_optimization_loop(
                         print(f"Warning: could not load previous model state after reset: {e}")
                 previous_model_state = None
 
-            # Fit model (skip for heteroscedastic as it's already fitted)
-            if algorithm != 'heteroscedastic_gp':
-                try:
-                    # Suppress warnings for relevance pursuit
-                    if algorithm == 'relevance_pursuit':
-                        with warnings.catch_warnings():
-                            warnings.filterwarnings('ignore', message='.*Robust rho not applied.*')
-                            if mll is not None:
-                                fit_gpytorch_mll(mll)
-                    else:
+            # Fit model
+            try:
+                # Suppress warnings for relevance pursuit
+                if algorithm == 'relevance_pursuit':
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings('ignore', message='.*Robust rho not applied.*')
                         if mll is not None:
                             fit_gpytorch_mll(mll)
-                except Exception as e:
-                    print(f"Error fitting model at iteration {i}: {e}")
+                else:
+                    if mll is not None:
+                        fit_gpytorch_mll(mll)
+            except Exception as e:
+                print(f"Error fitting model at iteration {i}: {e}")
             
             # Create acquisition function
-            if algorithm == 'modulating_surrogates':
-                # For modulating surrogates (Latent GP), use Monte Carlo acquisition
-                # Average acquisition function over posterior samples of latent variables
-                try:
-                    aq = create_mc_latent_acquisition(
-                        acq_func_factory=aq_func,
-                        latent_gp_model=model,
-                        X_baseline=train_x,  # Original dimension, no augmentation needed
-                        num_samples=None  # Use all MCMC samples
-                    )
-                except Exception as e:
-                    print(f"Warning: Failed to create MC acquisition ({e}), using standard acquisition")
-                    aq = aq_func(model=model, X_baseline=train_x)
-            else:
-                aq = aq_func(model=model, X_baseline=train_x)
+            aq = aq_func(model=model, X_baseline=train_x)
 
             # Optimize acquisition function
             if algorithm in ['joint', 'epistemic']:
@@ -333,10 +310,6 @@ def get_optimization_loop(
                     if candidate_acqvalue > new_acqvalue:
                         new_x = candidate_x
                         new_acqvalue = candidate_acqvalue
-            elif algorithm == 'modulating_surrogates':
-                # For modulating surrogates (Latent GP), optimize in normalized space
-                # The latent variables are marginalized out via Monte Carlo in the acquisition function
-                new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, normalized_bounds)
             else:
                 # Use normalized bounds for baseline methods or no algorithm
                 new_x, new_acqvalue = optimize_acqf_and_get_observation(aq, normalized_bounds)
@@ -347,12 +320,12 @@ def get_optimization_loop(
             train_x = torch.cat([train_x, new_x])
             train_obj = torch.cat([train_obj, new_obj])
 
-            # Enforce rolling window constraint
+            # Keep only the most recent samples (optional, AutoML CSV benchmark)
             if rolling_window is not None and train_x.shape[0] > rolling_window:
                 train_x = train_x[-rolling_window:]
                 train_obj = train_obj[-rolling_window:]
 
-            # Update progress - only evaluate NEW sample on current task
+            # Update progress (on the current task)
             new_value = exact_obj.item()
             running_best = max(running_best, new_value)
             best_observed.append(running_best)

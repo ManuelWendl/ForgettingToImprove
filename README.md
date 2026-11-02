@@ -1,317 +1,267 @@
 # Forgetting to Improve
 
-A Python package implementing robust Gaussian Process regression with sample optimization and forgetful Bayesian optimization techniques.
+Code for the paper **Forgetting to Improve** <!-- TODO: full title, authors, venue, arXiv link -->.
 
-## Overview
+Forgetting to Improve (F2I) removes training samples from a Gaussian process whenever
+removing them *reduces* the predictive uncertainty on a target region. The removal
+criterion is the gradient of the target-region uncertainty with respect to a soft
+removal of each sample, split into an epistemic part (posterior variance) and an
+aleatoric part (the MAP-II noise estimate). This repository contains:
 
-This package contains two main components:
-
-1. **Forgetting to Improve** - Robust GP regression with selective sample removal
-2. **Forgetful Bayesian Optimization** - Bayesian optimization with target region sampling
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Components](#components)
-  - [Forgetting to Improve](#forgetting-to-improve-robust-regression)
-  - [Forgetful Bayesian Optimization](#forgetful-bayesian-optimization)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Examples](#examples)
-- [Requirements](#requirements)
-
----
+| Package | What it does |
+|---|---|
+| [`forgetting_to_improve/forgetting_to_improve`](forgetting_to_improve/forgetting_to_improve) | F2I for GP regression on a target region (transductive benchmarks) and the restricted-curvature / gradient-dominance analysis |
+| [`forgetting_to_improve/forgetful_bayesian_optimization`](forgetting_to_improve/forgetful_bayesian_optimization) | Forgetful BO: F2I applied to the GP surrogate in every BO iteration, with the target region around promising points |
+| [`forgetting_to_improve/forgetful_rl`](forgetting_to_improve/forgetful_rl) | Forgetful RL: MBPO with a GP dynamics model whose real-data replay buffer is filtered with F2I |
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.8 or higher
-- PyTorch
-- GPyTorch
-- BoTorch
-
-### Setup
+Tested with Python 3.12 on Linux.
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd ForgettingToImproveBO
-
-# Create virtual environment
+git clone <repository-url> ForgettingToImprove
+cd ForgettingToImprove
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
----
+All commands below are run from the repository root. Figures use LaTeX text
+rendering when a `latex` binary is on the `PATH` and fall back to matplotlib's
+mathtext otherwise. The RL experiments use `cuda:0` by default; add `device=cpu`
+to run them on CPU.
 
-## Components
+## Reproducing the experiments
 
-### Forgetting to Improve (Robust Regression)
-
-A robust Gaussian Process regression framework that improves model performance by selectively removing training samples that negatively impact predictions on a target region.
-
-#### Key Features
-
-- **Sample Optimization**: Sequential and batch methods for removing harmful training samples
-- **Uncertainty Decomposition**: Separate handling of epistemic and aleatoric uncertainty
-- **Multiple Methods**:
-  - `sequential`: Iteratively remove worst samples
-  - `batch`: Remove multiple samples at once
-  - `targetSampling`: Adaptive target region sampling
-  - `relevance_pursuit`: BoTorch robust relevance pursuit
-  - `warped_gp`: Warped GP with input transformation
-  - `heteroscedastic_gp`: GP with heteroscedastic noise
-  - `none`: Standard GP baseline
-
-#### Noise Types for Influence Calculation in sequential or batch methods
-
-- `joint`: Consider both epistemic and aleatoric uncertainty (default)
-- `epistemic`: Focus on model uncertainty
-- `aleatoric`: Focus on data/observation noise
-
-#### Usage
+### 1. Twitter flash-crash comparison (GP vs. F2I)
 
 ```bash
 python -m forgetting_to_improve.forgetting_to_improve.main \
-  -c forgetting_to_improve/forgetting_to_improve/configs/single_experiment_symmetric.yaml
+    -c forgetting_to_improve/forgetting_to_improve/configs/comparison_twitter.yaml
 ```
 
-#### Configuration Example
+Writes `forgetting_to_improve/forgetting_to_improve/figures/comparison_twitter_seed5.pdf`
+(predictions) and `..._calibration.pdf`. Runs in a few seconds.
 
-```yaml
-experiment:
-  type: single  # or 'statistic' for multiple runs
-  method: sequential
-  objective: sin_symmetric_lengthscale_increase
-  noise: epistemic
-  A_limits: [-3, 3]  # Active learning region
-  X_limits: [-10, 10]  # Full domain
-  num_samples: 1000
-  num_train_samples: 20
-  num_A_samples: 50
-  seed: 0
-  fixed_kernel: true
-  show_plots: true
-  show_hessian: false
+### 2. Transductive regression benchmarks (100 seeds)
 
-kernel_config:
-  - type: 'rbf'
-    length_scale: 1.0
-```
-
-#### Supported Objectives
-
-- Synthetic functions: `botorch`, `sin_symmetric_lengthscale_increase`, `sin_asymmetric_lengthscale_increase`, `sin_periodic_lengthscale_increase`
-- Real datasets: `boston`, `twitter`
-
----
-
-### Forgetful Bayesian Optimization
-
-A Bayesian optimization framework that incorporates sample forgetting and target region focusing for improved optimization performance.
-
-#### Key Features
-
-- **Target Region Sampling**: Focus optimization on promising regions
-- **Sample Filtering**: Remove unhelpful samples during optimization
-- **Multiple Algorithms**:
-  - `none`: Standard Bayesian optimization
-  - `joint`: Joint epistemic and aleatoric filtering with target regions
-  - `epistemic`: Epistemic-only filtering with target regions
-- **Acquisition Functions**: Support for various BoTorch acquisition functions (UCB, EI, PI, etc.)
-- **Reproducible**: Deterministic sampling with seed control
-
-#### Usage
+Six benchmarks: Twitter flash crash, Yacht, Boston, CASP, and two synthetic
+functions with symmetric / asymmetric lengthscale increase. Each compares a
+homoscedastic GP (`none`), F2I (`sequential`, with the joint and the
+aleatoric-only criterion), target-region sampling, relevance pursuit, a warped GP
+and a heteroscedastic GP.
 
 ```bash
-python -m forgetting_to_improve.forgetfull_bayesian_optimization.main \
-  -c forgetting_to_improve/forgetfull_bayesian_optimization/configs/config_example.yaml
+bash scripts/run_transductive.sh                # all six
+bash scripts/run_transductive.sh twitter yacht  # a subset
 ```
 
-#### Configuration Example
+Each benchmark writes one table (mean ± std over 100 seeds of RMSE, MAE, NLL,
+calibration error, sharpness, runtime) to
+`forgetting_to_improve/forgetting_to_improve/results/comparison_<benchmark>_method_noise_<timestamp>.txt`,
+and the per-seed values to `..._per_seed.json` next to it.
+All six take about 1.5 to 3 hours on a 22-core CPU.
+These configs set `noise_init: data_variance`: the GP noise variance from which the
+removal criterion starts is the variance of each seed's training targets (instead of
+the kernel config's `white: noise_level`, the default for all other experiments).
 
-```yaml
-bayes_opt:
-  type: comparative
-  objective: botorch_ackley_2d  # or other BoTorch test functions
-  n_seeds: 20
-  init_points: 10
-  n_iter: 50
-  acquisition: qUpperConfidenceBound
-  acquisition_params:
-    kappa: 2.576
-  save_results: true
-  plot_results: true
-  results_path: botorch_ackley_2d_statistical.txt
-  
-  sample_optimization:
-    algorithm: [none, joint]  # Compare multiple algorithms
-    method: sequential
-    min_samples: 5
-    
-  kernel:
-    - type: matern
-      nu: 2.5
-      length_scale: 1.0
-      
-  alpha: 0.1  # GP noise parameter
-```
-
-#### Supported Test Functions
-
-Any BoTorch test function can be used by prefixing with `botorch_`:
-- `botorch_ackley_2d`
-- `botorch_branin`
-- `botorch_hartmann_6d`
-- etc.
-
----
-
-## Quick Start
-
-### Example 1: Robust GP Regression
-
-```python
-from forgetting_to_improve.forgetting_to_improve.main import run_experiments_from_config
-
-# Run single experiment
-run_experiments_from_config(
-    'forgetting_to_improve/forgetting_to_improve/configs/single_experiment_symmetric.yaml'
-)
-```
-
-### Example 2: Bayesian Optimization
-
-```python
-from forgetting_to_improve.forgetfull_bayesian_optimization.main import (
-    run_bayesian_optimization_experiment
-)
-
-# Run Bayesian optimization experiment
-run_bayesian_optimization_experiment(
-    'forgetting_to_improve/forgetfull_bayesian_optimization/configs/config_example.yaml'
-)
-```
-
-### Example 3: Statistical Comparison
+Bar comparison of all methods (newest table of each benchmark, written to
+`forgetting_to_improve/forgetting_to_improve/figures/benchmark_bar_comparison.pdf`):
 
 ```bash
-# Compare multiple methods across many seeds
-python -m forgetting_to_improve.forgetting_to_improve.main \
-  -c forgetting_to_improve/forgetting_to_improve/configs/statistical_comparison_sin_symmetric_lengthscale_increase.yaml
+python -m forgetting_to_improve.forgetting_to_improve.plot_transductive bar
 ```
 
----
-
-## Configuration
-
-### Experiment Types
-
-#### Forgetting to Improve
-- `single`: Run a single experiment with given parameters
-- `statistic`: Run statistical comparison across multiple seeds
-
-#### Forgetful Bayesian Optimization
-- `comparative`: Compare multiple algorithms on the same problem
-
-### Output
-
-Results are saved to:
-- **Forgetting to Improve**: `forgetting_to_improve/forgetting_to_improve/results/`
-- **Forgetful Bayesian Optimization**: `forgetting_to_improve/forgetfull_bayesian_optimization/results/`
-
-Figures are saved to:
-- **Forgetting to Improve**: `forgetting_to_improve/forgetting_to_improve/figures/`
-- **Forgetful Bayesian Optimization**: `forgetting_to_improve/forgetfull_bayesian_optimization/figures/`
----
-
-## Examples
-
-### Running Experiments
+**Noise ablation** (joint vs aleatoric-only removal criterion on Twitter and the
+asymmetric synthetic function, Forgetting to Improve only, initial GP noise from
+the kernel config; about 15 minutes):
 
 ```bash
-# Robust GP with sequential optimization
+bash scripts/run_transductive.sh noise_ablation
+python -m forgetting_to_improve.forgetting_to_improve.plot_transductive noise_ablation
+```
+
+Writes `figures/noise_ablation_bars.pdf` (mean over seeds) and
+`figures/noise_ablation_paired.pdf` (per-seed comparison with Wilcoxon tests).
+
+The datasets are included in `forgetting_to_improve/forgetting_to_improve/helper/`:
+Twitter flash crash (from the BoTorch tutorials), Boston housing, and Yacht
+hydrodynamics and CASP (both from the UCI Machine Learning Repository).
+
+### 3. Restricted curvature and gradient dominance
+
+```bash
+# lambda_min / lambda_max of the restricted Hessian, the empirical ratio rho_k and the
+# gradient-dominance upper bound along the removal path (symmetric, asymmetric, twitter)
+python -m forgetting_to_improve.forgetting_to_improve.run_curvature_single_grid
+
+# the same curvature quantities for different Gamma noise-prior concentrations a
+python -m forgetting_to_improve.forgetting_to_improve.run_curvature_ablations
+```
+
+Outputs: `figures/restricted_curvature_grid.pdf` and `figures/curvature_ablation_grid.pdf`
+(in `forgetting_to_improve/forgetting_to_improve/`); about 5 and 10 minutes.
+
+The closed-form gradients and Hessians used here are checked against autodiff /
+finite differences in `tests/`:
+
+```bash
+python -m pytest tests
+```
+
+### 4. Forgetful Bayesian optimization
+
+Eight BoTorch test functions (Ackley 2D/6D, augmented Rosenbrock, Branin,
+Griewank, Hartmann 6D, Holder table, Levy), 10 seeds each, with UCB or LogEI and
+with clean or corrupted observations (`*_noisy`: with probability 0.1 an
+observation is replaced by -100). Methods: standard BO (`none`), forgetful BO
+(`joint`), warped GP, relevance pursuit, trimmed MLL, Student-t GP and target-region
+filtering (the last three only with UCB).
+
+```bash
+bash scripts/run_bo.sh            # all 32 configurations
+bash scripts/run_bo.sh branin     # only configurations containing "branin"
+```
+
+The full suite is compute-heavy (about 50 hours when run sequentially, most of it relevance
+pursuit); configurations are independent and can be run in parallel.
+
+Results are written per group to
+`forgetting_to_improve/forgetful_bayesian_optimization/results/{ucb,ucb_noisy,lei,lei_noisy}/`.
+To plot simple regret, cumulative regret, best value and runtime of one group:
+
+```bash
+python -m forgetting_to_improve.forgetful_bayesian_optimization.helper.plot_saved_results \
+    -f forgetting_to_improve/forgetful_bayesian_optimization/results/ucb/ \
+    -o forgetting_to_improve/forgetful_bayesian_optimization/figures/ucb/
+```
+
+Illustration of forgetful BO on a 1D problem (GP before/after forgetting, target
+region, next query):
+
+```bash
+python -m forgetting_to_improve.forgetful_bayesian_optimization.plot_bo_snapshots
+```
+
+### 5. Forgetful RL: cartpole balance
+
+MBPO with a linear-kernel GP dynamics model on continuous cartpole, with
+(`forgetful_rl=true`) and without (GP-MBPO) F2I filtering of the real-data
+replay buffer, 5 seeds, 14k environment steps. The configuration is in
+`forgetting_to_improve/forgetful_rl/config/` (`main.yaml`, `algorithm/mbpo.yaml`,
+`dynamics_model/gp_model.yaml`, `overrides/mbpo_cartpole.yaml`).
+
+```bash
+bash scripts/run_rl_cartpole.sh            # 5 seeds x {Forgetful RL, GP-MBPO}
+bash scripts/run_rl_cartpole.sh removal    # one run that stores the removed samples
+
+python -m forgetting_to_improve.forgetful_rl.plotting.plot_cartpole_balance \
+    --runs-dir exp/mbpo/cartpole_balance
+python -m forgetting_to_improve.forgetful_rl.plotting.plot_removal_visualization \
+    --runs-dir exp/mbpo/cartpole_balance_removal
+```
+
+Each run takes 15-25 minutes on a GPU. Runs are written to
+`exp/mbpo/<experiment>/...`; each run folder contains its
+Hydra config, all logged metrics (`results.jsonl`) and, for the removal run, the
+kept/removed samples of every filtering step (`data_removal/`). Runs are also
+logged to Weights & Biases in offline mode (`wandb.mode=online
+wandb.entity=<entity>` to upload, `wandb.mode=disabled` to turn it off).
+
+### Neural-network kernel variants
+
+F2I also works with a neural-network kernel: the last-layer linearized Laplace
+(Jacobian) kernel in
+[`helper/nn_kernel`](forgetting_to_improve/forgetting_to_improve/helper/nn_kernel).
+The corresponding configurations end in `_jacobian`:
+
+```bash
+bash scripts/run_transductive.sh nn        # statistical_*_jacobian.yaml
 python -m forgetting_to_improve.forgetting_to_improve.main \
-  -c forgetting_to_improve/forgetting_to_improve/configs/single_experiment_symmetric.yaml
-
-# Statistical comparison on Boston housing dataset
-python -m forgetting_to_improve.forgetting_to_improve.main \
-  -c forgetting_to_improve/forgetting_to_improve/configs/boston.yaml
-
-# Forgetful Bayesian optimization on Ackley function
-python -m forgetting_to_improve.forgetfull_bayesian_optimization.main \
-  -c forgetting_to_improve/forgetfull_bayesian_optimization/configs/config_example.yaml
+    -c forgetting_to_improve/forgetting_to_improve/configs/comparison_twitter_jacobian.yaml
+bash scripts/run_bo.sh nn                   # *_jacobian(_noisy).yaml
 ```
 
----
+## Additional experiments (not in the paper)
 
-## Requirements
+### AutoML hyperparameter benchmark (BO)
 
-See `requirements.txt` for complete list.
+BO over the hyperparameters of glmnet on OpenML classification tasks, using the
+precomputed results table
+`forgetful_bayesian_optimization/automl_benchmarks/OpenMLRandomBotResultsFinal_mlr.classif.glmnet.csv`
+(an evaluation returns the accuracy of the nearest tabulated configuration).
+The tasks (`data_id`) are run one after another in a single BO run, `n_iter`
+iterations each:
 
----
-
-## Project Structure
-
-```
-ForgettingToImproveBO/
-├── forgetting_to_improve/
-│   ├── forgetting_to_improve/          # Robust regression
-│   │   ├── main.py
-│   │   ├── evaluate.py
-│   │   ├── optimize.py
-│   │   ├── models.py
-│   │   ├── objectives.py
-│   │   ├── uncertainty.py
-│   │   ├── configs/
-│   │   └── helper/
-│   └── forgetfull_bayesian_optimization/  # BO with forgetting
-│       ├── main.py
-│       ├── opti_loop.py
-│       ├── target_region.py
-│       ├── filter_samples.py
-│       ├── configs/
-│       └── helper/
-├── results/
-├── figures/
-├── requirements.txt
-└── README.md
+```bash
+python -m forgetting_to_improve.forgetful_bayesian_optimization.main \
+    -c forgetting_to_improve/forgetful_bayesian_optimization/configs/automl_csv_example.yaml
 ```
 
----
+### Forgetful RL: cartpole swingup (DeepMind Control)
 
-## Key Algorithms
+Needs `pip install dm_control==1.0.37` (includes MuJoCo). Dense (DMC) reward and
+a sparse variant, both with a Matern-kernel GP:
 
-### Sample Influence Calculation
+```bash
+python -m forgetting_to_improve.forgetful_rl.main overrides=mbpo_cartpole_swingup dynamics_model=gp_model_matern seed=0
+python -m forgetting_to_improve.forgetful_rl.main overrides=mbpo_cartpole_swingup_sparse dynamics_model=gp_model_matern seed=0
+```
 
-The package computes the influence of each training sample on prediction quality in a target region by analyzing:
-- **Epistemic uncertainty**: How much each sample reduces model uncertainty
-- **Aleatoric uncertainty**: How each sample affects prediction variance
+## Repository structure
 
-Samples with negative total influence are candidates for removal.
-
-### Target Region Optimization
-
-For Bayesian optimization, the algorithm:
-1. Identifies promising regions using upper confidence bounds
-2. Filters training samples based on their influence
-3. Optimizes acquisition function within target regions
-4. Updates the GP model with new observations
-
----
+```
+forgetting_to_improve/
+├── forgetting_to_improve/              # F2I for GP regression
+│   ├── main.py                         # entry point: python -m ... -c <config.yaml>
+│   ├── evaluate.py                     # one experiment: fit, remove samples, evaluate on A
+│   ├── optimize.py                     # sequential / batch sample removal
+│   ├── uncertainty.py                  # epistemic + aleatoric removal criterion
+│   ├── curvature_bounds.py             # restricted curvature, gradient-dominance bound
+│   ├── models.py                       # baseline models (heteroscedastic GP, ...)
+│   ├── objectives.py                   # synthetic objectives
+│   ├── run_curvature_single_grid.py
+│   ├── run_curvature_ablations.py
+│   ├── plot_transductive.py            # bar comparison and noise-ablation figures
+│   ├── configs/
+│   └── helper/                         # data, kernels, metrics, plotting, nn_kernel/
+├── forgetful_bayesian_optimization/
+│   ├── main.py                         # entry point: python -m ... -c <config.yaml>
+│   ├── opti_loop.py                    # BO loop for all methods
+│   ├── filter_samples.py, target_region.py, baseline_models.py
+│   ├── plot_bo_snapshots.py
+│   ├── configs/
+│   └── helper/                         # config parsing, result writing, plotting
+└── forgetful_rl/
+    ├── main.py                         # Hydra entry point
+    ├── algorithm/mbpo.py               # MBPO training loop with forgetting
+    ├── forgetting/                     # replay-buffer filtering and target region
+    ├── model/                          # GP dynamics models
+    ├── env/                            # continuous cartpole, reward/termination functions
+    ├── helper/                         # SAC, logging, utilities
+    ├── plotting/
+    └── config/
+scripts/                                # run_transductive.sh, run_bo.sh, run_rl_cartpole.sh
+tests/                                  # derivative checks for the curvature analysis
+```
 
 ## Citation
 
-If you use this code in your research, please cite:
-
+<!-- TODO: replace with the final BibTeX entry -->
 ```bibtex
-@article{tbd,
-  title={TBD},
-  author={[Author Names]},
-  year={2026}
+@inproceedings{forgetting_to_improve,
+  title     = {Forgetting to Improve},
+  author    = {TODO},
+  booktitle = {TODO},
+  year      = {2026}
 }
 ```
+
+## Acknowledgements
+
+The RL code builds on [MBRL-Lib](https://github.com/facebookresearch/mbrl-lib)
+(MIT license; files keep their original headers) and
+[pytorch-soft-actor-critic](https://github.com/pranz24/pytorch-soft-actor-critic)
+(MIT license, see `forgetting_to_improve/forgetful_rl/helper/pytorch_sac_pranz24/LICENSE`).
+The DeepMind Control wrapper is [dmc2gym](https://github.com/denisyarats/dmc2gym)
+(MIT license, see `forgetting_to_improve/forgetful_rl/helper/dmc2gym/LICENSE`).

@@ -4,19 +4,15 @@ import matplotlib.ticker as ticker
 from tueplots import bundles, figsizes
 from seaborn import axes_style
 import os
+import shutil
 import numpy as np
 from scipy import stats
 
-def _uses_jacobian_kernel(kernel_config) -> bool:
-    """True if a kernel_config (list of {'type': ..., ...} dicts, as parsed
-    from a comparison_*_jacobian.yaml's `kernel:` block) includes the
-    linearised-Laplace / Jacobian kernel."""
-    if not kernel_config:
-        return False
-    if isinstance(kernel_config, dict):
-        kernel_config = [kernel_config]
-    return any(isinstance(k, dict) and str(k.get('type', '')).lower() == 'jacobian'
-               for k in kernel_config)
+
+def latex_available() -> bool:
+    """True if a LaTeX install is on PATH (needed for text.usetex=True).
+    Paper figures use real LaTeX; without it we fall back to mathtext."""
+    return shutil.which("latex") is not None
 
 
 def plot_predictions_comparison(objective_function, x, comparison_data, x_limits, A_limits, title=None, annotation=False, usetex=False):
@@ -32,10 +28,7 @@ def plot_predictions_comparison(objective_function, x, comparison_data, x_limits
         A_limits: Limits for the region box
         title: Base title for the plot
         annotation: Whether to annotate sample indices
-        usetex: If True, render text with a real LaTeX install instead of
-            matplotlib's mathtext (used for the jacobian/NN-kernel
-            comparison plots); defaults to False elsewhere to avoid
-            requiring a LaTeX install.
+        usetex: If True, render text with LaTeX instead of matplotlib's mathtext
     """
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
@@ -176,480 +169,6 @@ def plot_predictions_comparison(objective_function, x, comparison_data, x_limits
     print(f"Comparison plot saved to {filepath}")
     plt.close()
 
-def plot_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std, x_limits, A_limits, title=None, annotation=False):
-    """
-    Plot the GP predictions along with the true function using ICLR 2023 style.
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.iclr2023()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=1))  # Changed to ncols=2 for side-by-side
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})
-
-    halfsided = False
-
-    if halfsided:
-        # Create figure with ICLR styling - specify figsize for half width
-        fig, ax = plt.subplots(1, 1, figsize=(figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][0]/2, 
-                                            figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][1]))
-    else:
-        # Create figure with proper ICLR styling
-        fig, ax = plt.subplots(1, 1, figsize=(figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][0], 
-                                            figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][1]))
-        
-    # Add formatter for scientific notation
-    formatter = ticker.ScalarFormatter(useMathText=True)
-    formatter.set_scientific(True)
-    formatter.set_powerlimits((-1, 1))
-    ax.xaxis.set_major_formatter(formatter)
-    
-    # Add grid with specific styling
-    ax.grid(True, linewidth=0.5, c="gainsboro", zorder=0)
-    
-    # Define colors matching the reference style
-    colors = {
-        'true_function': "#5F4690",    # Blue-purple
-        'samples': "#0F8554",          # Green
-        'prediction': "#CC503E",       # Red
-        'uncertainty': "#CC503E",      # Red (same as prediction)
-        'region': 'lightgreen'         # Light green for region
-    }
-    
-    # Plot region box
-    box = Rectangle((A_limits[0], min(objective_function(x))-3), A_limits[1] - A_limits[0], max(objective_function(x))+3 - (min(objective_function(x))-3), linewidth=1.25, edgecolor='gray', 
-                    facecolor=colors['region'], alpha=0.3, zorder=0, label=r'$\mathcal{A}$')
-    ax.add_patch(box)
-    
-    # Plot true function
-    ax.plot(x, objective_function(x), color=colors['true_function'], 
-            linewidth=1.5, label=r'$f^*$', alpha=0.8)
-    
-    # Plot samples with specific marker style
-    ax.scatter(x_samples, y_samples, c=colors['samples'], marker='o', 
-              s=20, label='Samples', edgecolors=colors['samples'], linewidth=0.1, zorder=5)
-    
-    # Add sample index annotations if requested
-    if annotation:
-        for i, (x_sample, y_sample) in enumerate(zip(x_samples, y_samples)):
-            ax.annotate(str(i), (x_sample, y_sample), 
-                       xytext=(3, 3), textcoords='offset points',
-                       fontsize=6, color='black', 
-                       bbox=dict(boxstyle='round,pad=0.2', facecolor='white', 
-                                edgecolor='none', alpha=0.7))
-    
-    # Plot GP prediction
-    ax.plot(x, y_pred, color=colors['prediction'], linestyle='--', 
-            linewidth=1.5, label=r'$\mu_{\mathrm{GP}}(x)$')
-    
-    # Plot uncertainty band
-    ax.fill_between(x, y_pred - 2.567 * y_std, y_pred + 2.567 * y_std, 
-                    color=colors['uncertainty'], alpha=0.2, 
-                    label=r'$\pm 2.567 \sigma_{\mathrm{GP}}(x)$')
-    
-    # Set labels with LaTeX formatting
-    ax.set_xlabel('$x$')
-    ax.set_ylabel('$f(x)$')
-    
-    # # Set y-limits
-    ax.set_ylim(min(objective_function(x))-3, max(objective_function(x))+3)
-    ax.set_xlim(x_limits)
-
-    # Style the spines
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.25)
-    
-    # Create legend with ICLR style - adjusted position for smaller figure
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.45), 
-                      ncol=3, frameon=False, columnspacing=0.8,  # Reduced ncol and spacing
-                      handletextpad=0.4, handlelength=1.2, fontsize=8)  # Smaller legend
-    
-    # Save the plot
-    if title:
-        filename = title.replace(" ", "_").lower() + '.pdf'
-    else:
-        filename = 'gp_predictions.pdf'
-    
-    # Create figures directory if it doesn't exist
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    plt.close()
-
-def clean_kernel_name(kernel_name):
-    """Remove 'kernel_*_' prefix from kernel names for cleaner display."""
-    import re
-    # Remove pattern like 'kernel_0_', 'kernel_1_', etc.
-    cleaned = re.sub(r'^kernel_\d+_', '', kernel_name)
-    return cleaned
-
-
-def plot_per_kernel_predictions(objective_function, x, x_samples, y_samples, y_pred, y_std, 
-                               x_limits, A_limits, kernel_indicators=None, kernel_names=None, 
-                               title=None, annotation=False):
-    """
-    Plot GP predictions with different colors for samples used by different kernels.
-    
-    Args:
-        objective_function: True function to plot
-        x: Test points
-        x_samples: Training sample locations
-        y_samples: Training sample values
-        y_pred: GP predictions
-        y_std: GP prediction standard deviations
-        x_limits: X-axis limits
-        A_limits: Active learning region limits
-        kernel_indicators: Dict mapping kernel names to boolean arrays indicating which samples are used
-        kernel_names: List of kernel names
-        title: Plot title
-        annotation: Whether to annotate sample indices
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.iclr2023()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=2))
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Create figure
-    fig, ax = plt.subplots(1, 1, figsize=(figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][0],
-                                          figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][1]))
-    
-    # Add formatter for scientific notation
-    formatter = ticker.ScalarFormatter(useMathText=True)
-    formatter.set_scientific(True)
-    formatter.set_powerlimits((-1, 1))
-    ax.xaxis.set_major_formatter(formatter)
-    
-    # Add grid
-    ax.grid(True, linewidth=0.5, c="gainsboro", zorder=0)
-    
-    # Define colors
-    colors = {
-        'true_function': "#5F4690",    # Blue-purple
-        'prediction': "#CC503E",       # Red
-        'uncertainty': "#CC503E",      # Red (same as prediction)
-        'region': 'lightgreen',        # Light green for region
-        'unused': "#CCCCCC",           # Gray for unused samples
-    }
-    
-    # Define distinct colors for different kernels
-    kernel_colors = [
-        "#0F8554",  # Green
-        "#FF8C00",  # Dark orange  
-        "#8B0000",  # Dark red
-        "#4B0082",  # Indigo
-        "#FF1493",  # Deep pink
-        "#008B8B",  # Dark cyan
-        "#9ACD32",  # Yellow green
-        "#FF4500",  # Orange red
-    ]
-    
-    # Plot region box
-    box = Rectangle((A_limits[0], min(objective_function(x))-1), A_limits[1] - A_limits[0], max(objective_function(x))+1 - (min(objective_function(x))-1), linewidth=1.25, edgecolor='gray', 
-                    facecolor=colors['region'], alpha=0.3, zorder=0, label=r'$\mathcal{A}$')
-    ax.add_patch(box)
-    
-    # Plot true function
-    ax.plot(x, objective_function(x), color=colors['true_function'], 
-            linewidth=1.5, label=r'$f^*$', alpha=0.8)
-    
-    # Plot samples with different colors based on kernel usage
-    if kernel_indicators is not None and kernel_names is not None:
-        # Find which samples are used by which kernels
-        sample_kernel_usage = {}
-        for i in range(len(x_samples)):
-            used_by_kernels = []
-            for kernel_name in kernel_names:
-                if kernel_name in kernel_indicators and kernel_indicators[kernel_name][i]:
-                    used_by_kernels.append(kernel_name)
-            sample_kernel_usage[i] = used_by_kernels
-        
-        # Group samples by their exact kernel usage patterns
-        usage_patterns = {}
-        for i in range(len(x_samples)):
-            used_kernels = sample_kernel_usage[i]
-            if len(used_kernels) == 0:
-                pattern_key = "unused"
-            elif len(used_kernels) == 1:
-                pattern_key = clean_kernel_name(used_kernels[0])
-            else:
-                # Sort kernel names for consistent labeling
-                pattern_key = "+".join(sorted([clean_kernel_name(k) for k in used_kernels]))
-            
-            if pattern_key not in usage_patterns:
-                usage_patterns[pattern_key] = []
-            usage_patterns[pattern_key].append(i)
-        
-        # Plot samples grouped by usage pattern
-        plotted_samples = set()
-        
-        # First, plot samples used by individual kernels
-        for j, kernel_name in enumerate(kernel_names):
-            cleaned_kernel_name = clean_kernel_name(kernel_name)
-            if cleaned_kernel_name in usage_patterns:
-                indices = usage_patterns[cleaned_kernel_name]
-                if indices:
-                    color = kernel_colors[j % len(kernel_colors)]
-                    ax.scatter(x_samples[indices], y_samples[indices], 
-                              c=color, marker='o', s=20, 
-                              label=f'{cleaned_kernel_name} only', 
-                              edgecolors=color, linewidth=0.1, zorder=5)
-                    plotted_samples.update(indices)
-        
-        # Plot samples used by multiple kernels with specific combination labels
-        shared_pattern_colors = {}
-        color_idx = len(kernel_names)  # Start after individual kernel colors
-        
-        cleaned_kernel_names = [clean_kernel_name(k) for k in kernel_names]
-        for pattern_key, indices in usage_patterns.items():
-            if pattern_key not in cleaned_kernel_names and pattern_key != "unused" and indices:
-                # This is a shared pattern - assign it a unique color and marker
-                if pattern_key not in shared_pattern_colors:
-                    shared_pattern_colors[pattern_key] = kernel_colors[color_idx % len(kernel_colors)]
-                    color_idx += 1
-                
-                color = shared_pattern_colors[pattern_key]
-                ax.scatter(x_samples[indices], y_samples[indices], 
-                          c=color, marker='s', s=25,  # Square marker for shared
-                          label=pattern_key,
-                          edgecolors=color, linewidth=0.5, zorder=6)
-                plotted_samples.update(indices)
-        
-        # Plot unused samples
-        if "unused" in usage_patterns and usage_patterns["unused"]:
-            indices = usage_patterns["unused"]
-            ax.scatter(x_samples[indices], y_samples[indices], 
-                      c=colors['unused'], marker='x', s=20,
-                      label='Unused',
-                      edgecolors=colors['unused'], linewidth=1.0, zorder=4)
-            plotted_samples.update(indices)
-        
-    else:
-        # Fallback to regular plotting if no kernel information
-        ax.scatter(x_samples, y_samples, c="#0F8554", marker='o', 
-                  s=20, label='Samples', edgecolors="#0F8554", linewidth=0.1, zorder=5)
-    
-    # Add sample index annotations if requested
-    if annotation:
-        for i, (x_sample, y_sample) in enumerate(zip(x_samples, y_samples)):
-            ax.annotate(str(i), (x_sample, y_sample), 
-                       xytext=(3, 3), textcoords='offset points',
-                       fontsize=6, color='black', 
-                       bbox=dict(boxstyle='round,pad=0.2', facecolor='white', 
-                                edgecolor='none', alpha=0.7))
-    
-    # Plot GP prediction
-    ax.plot(x, y_pred, color=colors['prediction'], linestyle='--', 
-            linewidth=1.5, label=r'$\mu_{\mathrm{GP}}(x)$')
-    
-    # Plot uncertainty band
-    ax.fill_between(x, y_pred - 2.567 * y_std, y_pred + 2.567 * y_std, 
-                    color=colors['uncertainty'], alpha=0.2, 
-                    label=r'$\pm 2.567 \sigma_{\mathrm{GP}}(x)$')
-    
-    # Set labels with LaTeX formatting
-    ax.set_xlabel('$x$')
-    ax.set_ylabel('$f(x)$')
-    
-    # Set limits
-    ax.set_ylim(min(objective_function(x)), max(objective_function(x)))
-    ax.set_xlim(x_limits)
-
-    # Style the spines
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.25)
-    
-    # Create legend - adjust based on number of items
-    handles, labels = ax.get_legend_handles_labels()
-    n_items = len(labels)
-    
-    if n_items <= 4:
-        ncol = 2
-        bbox_y = 1.35
-        fontsize = 8
-    elif n_items <= 8:
-        ncol = 3
-        bbox_y = 1.50
-        fontsize = 6
-    else:
-        ncol = 4  
-        bbox_y = 1.60
-        fontsize = 6
-    
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, bbox_y), 
-              ncol=ncol, frameon=False, columnspacing=0.8,
-              handletextpad=0.4, handlelength=1.2, fontsize=fontsize)
-    
-    # Save the plot
-    if title:
-        filename = title.replace(" ", "_").lower() + '.pdf'
-    else:
-        filename = 'per_kernel_gp_predictions.pdf'
-    
-    # Create figures directory if it doesn't exist
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    plt.close()
-
-
-def visualize_hessian(H, v, u, removed_point, title="Hessian Matrix"):
-    """
-    Visualize the Hessian matrix and vectors using heatmaps with ICLR 2023 style.
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.iclr2023()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=1))
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Create figure with proper ICLR styling for 3 subplots with equal heights
-    fig, axes = plt.subplots(1, 3, width_ratios=[20,1,1], constrained_layout=True,
-                            figsize=(figsizes.iclr2023(nrows=1, ncols=1)['figure.figsize'][0], 
-                                    figsizes.iclr2023(nrows=1, ncols=1)['figure.figsize'][1]))
-
-    ax1, ax2, ax3 = axes
-
-    # Disable grid for all subplots (consistent heatmap style)
-    for ax in axes:
-        ax.grid(False)
-    
-    # Plot Hessian matrix
-    cax1 = ax1.matshow(H, cmap='PRGn')
-    
-    # Mark the removed point's row and column in red on Hessian
-    if removed_point is not None:
-        # Mark the row
-        ax1.axhline(y=removed_point, color="#CC503E", linewidth=2, alpha=0.8)
-        # Mark the column
-        ax1.axvline(x=removed_point, color="#CC503E", linewidth=2, alpha=0.8)
-    
-    # Add colorbar for Hessian
-    cbar1 = fig.colorbar(cax1, ax=ax1, fraction=0.046, pad=0.04)
-    cbar1.ax.tick_params(labelsize=10)
-    
-    # Set labels for Hessian
-    ax1.set_xlabel('Index')
-    ax1.set_ylabel('Index')
-    ax1.set_title(r'Hessian $\sigma_W$')
-    
-    # Plot v vector as heatmap (reshape to column vector)
-    v_reshaped = v.reshape(-1, 1)  # Make it a column vector for display
-    cax2 = ax2.matshow(v_reshaped, cmap='PRGn', aspect='auto')
-    
-    # Mark the removed point in red
-    if removed_point is not None and removed_point < len(v):
-        ax2.axhline(y=removed_point, color="#CC503E", linewidth=2, alpha=0.8)
-    
-    # Add colorbar for v
-    cbar2 = fig.colorbar(cax2, ax=ax2, fraction=0.46, pad=0.3)
-    cbar2.ax.tick_params(labelsize=10)
-    
-    ax2.set_xlabel('Value')
-    ax2.set_ylabel('Index')
-    ax2.set_title(r'$v(x_t)$')
-    ax2.set_xticks([])  # Remove x-axis ticks since it's just one column
-
-    # Plot u vector as heatmap (reshape to column vector)
-    u_reshaped = u.reshape(-1, 1)  # Make it a column vector for display
-    cax3 = ax3.matshow(u_reshaped, cmap='PRGn', aspect='auto')
-
-    print(u)
-    # Mark the removed point in red
-    if removed_point is not None and removed_point < len(u):
-        ax3.axhline(y=removed_point, color="#CC503E", linewidth=2, alpha=0.8)
-    
-    # Add colorbar for u
-    cbar3 = fig.colorbar(cax3, ax=ax3, fraction=0.46, pad=0.3)
-    cbar3.ax.tick_params(labelsize=10)
-    
-    ax3.set_xlabel('Value')
-    ax3.set_ylabel('Index')
-    ax3.set_title(r'$u(x_t)$')
-    ax3.set_xticks([])  # Remove x-axis ticks since it's just one column
-    
-    # Style the spines for all subplots
-    for ax in [ax1, ax2, ax3]:
-        for spine in ax.spines.values():
-            spine.set_linewidth(1.25)
-    
-    # Save the plot
-    filename = title.replace(" ", "_").lower() + '.pdf'
-    
-    # Create figures directory if it doesn't exist
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    plt.close()
-
-def plot_calibration_curve(p_levels, p_hat, title="Calibration Curve"):
-    """
-    Plot the calibration curve using ICLR 2023 style.
-    """
-    # Apply ICLR 2023 styling
-    theme = bundles.iclr2023()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=3))
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Create figure with proper ICLR styling
-    fig, ax = plt.subplots(1, 1, figsize=(figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][0]/2, 
-                                          figsizes.iclr2023(nrows=1, ncols=2)['figure.figsize'][1]))
-
-    # Add grid
-    ax.grid(True, linewidth=0.5, c="gainsboro", zorder=0)
-    
-    # Plot calibration curve
-    ax.bar(p_levels-(1/(2*len(p_levels))), p_hat, width=0.1, alpha=0.7, color='#5F4690', label='Empirical', zorder=4)
-
-    # Plot ideal calibration line
-    ax.plot([0, 1], [0, 1], linestyle='--', color='black', label='Ideal', zorder=5)
-
-    # Set labels with LaTeX formatting
-    ax.set_xlabel('$p$')
-    ax.set_ylabel('$\\hat{p}$')
-    
-    # Set limits and aspect
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect('equal', adjustable='box')
-    
-    # Style the spines
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.25)
-    
-    # Save the plot
-    filename = title.replace(" ", "_").lower() + '.pdf'
-    
-    # Create figures directory if it doesn't exist
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    plt.close()
-
 
 def plot_calibration_comparison(objective_function, x, comparison_data, title=None, A_limits=None, usetex=False):
     """
@@ -663,10 +182,7 @@ def plot_calibration_comparison(objective_function, x, comparison_data, title=No
         title: Base title for the plot
         A_limits: Target region limits (tuple for 1D or list of tuples for multidimensional)
                   If provided, calibration is computed only within this region
-        usetex: If True, render text with a real LaTeX install instead of
-            matplotlib's mathtext (used for the jacobian/NN-kernel
-            comparison plots); defaults to False elsewhere to avoid
-            requiring a LaTeX install.
+        usetex: If True, render text with LaTeX instead of matplotlib's mathtext
     """
     # Apply ICLR 2023 styling
     theme = bundles.neurips2024()
@@ -801,129 +317,6 @@ def plot_calibration_comparison(objective_function, x, comparison_data, title=No
     plt.close()
 
 
-def visualize_per_kernel_influence(epistemic_influences, title="Per-Kernel Influences"):
-    """
-    Visualize per-kernel epistemic and aleatoric influences using bar plots with ICLR 2023 style.
-    """
-    import numpy as np
-    # Validate that all elements are numbers before converting
-    # Ensure inputs are numpy float arrays
-    epistemic_influences = np.array(epistemic_influences, dtype=float)
-
-    # Apply ICLR 2023 styling
-    theme = bundles.iclr2023()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update(figsizes.iclr2023(nrows=1, ncols=2))
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})      
-
-    n_test_points = 10
-
-    # Plot this as a colorplot with datapoinsts x kernels matrix and the influence values as colors
-    fig, axes = plt.subplots(n_test_points, 1, figsize=(figsizes.iclr2023(nrows=n_test_points, ncols=1)['figure.figsize'][0], 
-                                          figsizes.iclr2023(nrows=n_test_points, ncols=1)['figure.figsize'][1]))   
-    testpoint = 0
-    for ax in axes:
-        ax.grid(False)  
-        # Plot epistemic influences
-        epistemic_influence = epistemic_influences[:, testpoint, :]
-        cax1 = ax.matshow(epistemic_influence, cmap='viridis')
-        cbar1 = fig.colorbar(cax1, ax=ax, fraction=0.046, pad=0.04, orientation='horizontal', location='bottom')
-        cbar1.ax.tick_params(labelsize=10)
-        ax.set_xlabel('Kernels')
-        ax.set_ylabel('Data Points')
-        ax.set_title('Epistemic Influences')
-
-        for spine in ax.spines.values():
-            spine.set_linewidth(1.25)
-
-        testpoint += 1
-    # Save the plot
-    filename = title.replace(" ", "_").lower() + '.pdf'
-    
-    # Create figures directory if it doesn't exist
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    plt.close()
-
-
-def plot_optimal_comparison(fti_uncertainty, optimal_uncertainty, n_samples_list, title="FTI vs Optimal Subset Selection"):
-    """
-    Plot comparison between FTI (greedy) and optimal (exhaustive search) subset selection.
-    
-    Args:
-        fti_uncertainty: List of uncertainties from FTI greedy approach
-        optimal_uncertainty: List of uncertainties from optimal exhaustive search
-        n_samples_list: List of subset sizes corresponding to each uncertainty value
-        title: Plot title
-    """
-    if not fti_uncertainty or not optimal_uncertainty:
-        print("No uncertainty data to plot")
-        return
-    
-    # Apply ICLR 2023 styling
-    theme = bundles.neurips2024()
-    plt.rcParams.update(axes_style("white"))
-    plt.rcParams.update(theme)
-    plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    # Disable LaTeX to avoid requiring dvipng/latex installation
-    plt.rcParams.update({"text.usetex": False})
-    plt.rcParams.update({"legend.frameon": False})
-    
-    # Create single plot
-    fig, ax = plt.subplots(1, 1, 
-                          figsize=(figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.6)['figure.figsize']))
-    
-    # Define colors
-    color_fti = "#5F4690"  # Purple - Forgetting to Improve
-    color_optimal = "#1D6996"  # Blue - Optimal
-    
-    # Convert to numpy arrays
-    n_samples_array = np.array(n_samples_list)
-    fti_array = np.array(fti_uncertainty)
-    optimal_array = np.array(optimal_uncertainty)
-    
-    # Plot both curves
-    ax.plot(n_samples_array, fti_array, marker='o', markersize=5, 
-            color=color_fti, linewidth=2, alpha=0.9, label='FTI (Greedy)')
-    ax.plot(n_samples_array, optimal_array, marker='s', markersize=5, 
-            color=color_optimal, linewidth=2, alpha=0.9, label='Optimal (Exhaustive)')
-    
-    # Set labels
-    ax.set_xlabel(r'Number of Samples $|\mathcal{S}|$')
-    ax.set_ylabel(r'Predictive Uncertainty $\bar{\sigma}^2$')
-    ax.grid(True, alpha=0.3, linewidth=0.5)
-    
-    # Add legend
-    ax.legend(loc='best', frameon=False, fontsize=9)
-    
-    # Invert x-axis to show decreasing samples (left to right)
-    ax.invert_xaxis()
-    
-    # Style spines
-    for spine in ax.spines.values():
-        spine.set_linewidth(1.25)
-    
-    plt.title(title, fontsize=12)
-    plt.tight_layout()
-    
-    # Save the plot
-    filename = title.replace(" ", "_").lower() + '.pdf'
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-    
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    print(f"Optimal comparison plot saved to {filepath}")
-    plt.close()
-
-
 def _mark_assumption_violations(ax, curvature_history: dict, label=None):
     """Black x on Jbar(T_k) at every step k where the gradient-dominance
     assumption ||u^(k)+v^(k)||_inf^2 >= (2 m_R/q)[U_q - Jbar(T_k)]_+ fails."""
@@ -1051,11 +444,9 @@ def _draw_upper_bound(ax_U, curvature_history: dict, show_legends: bool = True):
 
 def _draw_curvature_bounds(ax, ax_rho, curvature_history: dict, show_star: bool = True,
                            show_legends: bool = True, ax_U=None):
-    """Draw the restricted-curvature plot of plot_curvature_bounds onto given
-    axes: lambda_min/lambda_max of H_R with concave/convex shading on `ax`,
-    and (if ax_rho is not None) rho_k with rho_hat = min_k rho_k on `ax_rho`.
-    Shared by plot_curvature_bounds and plot_curvature_bounds_grid so both
-    look identical."""
+    """Draw the restricted-curvature plot onto given axes: lambda_min/lambda_max
+    of H_R with concave/convex shading on `ax`, and (if ax_rho is not None)
+    rho_k with rho_hat = min_k rho_k on `ax_rho`."""
     color_min = "#1D6996"  # Blue
     color_max = "#CC503E"  # Red
 
@@ -1100,9 +491,7 @@ def _draw_curvature_bounds(ax, ax_rho, curvature_history: dict, show_star: bool 
         y_top = v_max + y_margin
 
     # Fill regions: negative = concave (green), positive = convex (red).
-    # Concavity of the *entire* submatrix (Lemma 5's RSC guarantee) requires
-    # lambda_max <= 0, i.e. the worst-case (largest) eigenvalue, not just the
-    # best case, so the shading is driven by lambda_max rather than lambda_min.
+    # Concavity of the whole restricted submatrix requires lambda_max <= 0.
     if v_min < 0:
         ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
 
@@ -1173,75 +562,10 @@ def _apply_curvature_plot_style():
     plt.rcParams.update({"legend.frameon": False})
 
 
-def plot_curvature_bounds(curvature_history: dict, title: str = "Curvature Bounds Evolution"):
-    """
-    Plot the evolution of the *restricted* curvature bounds during sample
-    removal, matching Figure 25 / Section M ("Experimental Validation of
-    Concavity") of the paper: at each removal step k, lambda_min/lambda_max
-    are the spectral bounds of the Hessian submatrix restricted to R_k =
-    T ∩ S^(k) (this step's removal *and* every later one still present), not
-    just the diagonal entry of the single point removed at that step -- see
-    calculate_restricted_curvature_bounds. These correspond directly to
-    -M_R and -m_R in Lemma 5: for the RSC/RSM guarantee of Theorem 1 to
-    hold, both curves should stay negative (concave) throughout.
-
-    Args:
-        curvature_history: Dictionary with keys 'lambda_min', 'lambda_max',
-            'm' (single-point diagonal, kept for reference), and 'n_samples'.
-        title: Plot title
-    """
-    if not curvature_history or not curvature_history.get('lambda_max'):
-        print("No curvature history to plot")
-        return
-
-    _apply_curvature_plot_style()
-
-    # Second panel with the empirical ratio rho_k if it was computed
-    rho = curvature_history.get('rho') or []
-    show_rho = len(rho) == len(curvature_history['n_samples']) and len(rho) > 0
-
-    # Third panel with the upper bound U_q if it was computed
-    show_U = _has_upper_bound(curvature_history)
-
-    nrows = 1 + int(show_rho) + int(show_U)
-    fig, axes = plt.subplots(
-        nrows, 1, sharex=True, squeeze=False,
-        figsize=(figsizes.iclr2023(nrows=nrows, ncols=1, height_to_width_ratio=0.5)['figure.figsize']))
-    axes = list(axes[:, 0])
-    ax = axes.pop(0)
-    ax_rho = axes.pop(0) if show_rho else None
-    ax_U = axes.pop(0) if show_U else None
-
-    _draw_curvature_bounds(ax, ax_rho, curvature_history, ax_U=ax_U)
-    ax.set_ylabel(r'Restricted Curvature')
-    ax.yaxis.set_label_coords(-0.075, 0.5)
-    if ax_rho is not None:
-        ax_rho.set_ylabel(r'$\rho_k$')
-        ax_rho.yaxis.set_label_coords(-0.075, 0.5)
-    if ax_U is not None:
-        ax_U.set_ylabel(r'Removal gain')
-        ax_U.yaxis.set_label_coords(-0.075, 0.5)
-
-    ax.set_title(title, fontsize=12)
-
-    plt.tight_layout()
-
-    # Save the plot
-    filename = title.replace(" ", "_").lower() + '.pdf'
-    figures_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'figures')
-    os.makedirs(figures_dir, exist_ok=True)
-    filepath = os.path.join(figures_dir, filename)
-
-    fig.savefig(filepath, bbox_inches='tight', dpi=300)
-    print(f"Curvature bounds plot saved to {filepath}")
-    plt.close()
-
-
 def plot_curvature_bounds_grid(panels, filename_stem: str = "restricted_curvature_grid"):
-    """Side-by-side version of plot_curvature_bounds: one column per
-    experiment (e.g. symmetric / asymmetric / twitter), drawn with the same
-    code as the single plots (_draw_curvature_bounds), with the rho_hat star
-    omitted and one shared legend below instead of per-panel legends.
+    """Restricted-curvature plot with one column per experiment (e.g.
+    symmetric / asymmetric / twitter), drawn with _draw_curvature_bounds, with
+    the rho_hat star omitted and one shared legend below.
 
     Args:
         panels: List of (short_title, curvature_history) pairs, left to right
@@ -1472,15 +796,7 @@ def _draw_curvature_condition(ax, curvature_histories: dict, label_color: dict,
             ax.axhspan(y_bottom, 0, color='green', alpha=0.15, zorder=0)
         ax.axhspan(0, y_top, color='red', alpha=0.15, zorder=0)
 
-        # Axes-fraction placement (ax.transAxes), not data coordinates: a
-        # data-coordinate anchor at the extreme edge of the plotted x-range
-        # (e.g. global min n_samples) sits flush with -- and, with usetex
-        # font metrics, can render past -- the axes' right border, clipping
-        # the label in the saved figure. Anchoring in the axes' own [0, 1]
-        # fraction space keeps 'convex'/'concave' just inside the panel
-        # regardless of each run's actual x/y data range. Kept near the
-        # right edge (top-/bottom-right corner) since lambda_min/lambda_max
-        # converge toward zero there, leaving the corner uncluttered.
+        # Labels in axes coordinates so they stay inside the panel
         ax.text(0.96, 0.94, 'convex', transform=ax.transAxes,
                 verticalalignment='top', horizontalalignment='right',
                 fontsize=7, color='darkred', weight='bold')
@@ -1489,9 +805,6 @@ def _draw_curvature_condition(ax, curvature_histories: dict, label_color: dict,
                     verticalalignment='bottom', horizontalalignment='right',
                     fontsize=7, color='darkgreen', weight='bold')
 
-    # Below-axes legend (not to the right): with up to 2*n_runs entries this
-    # avoids needing to widen the figure -- it just wraps into more rows,
-    # which the figsize above already reserved height for.
     for spine in ax.spines.values():
         spine.set_linewidth(1.25)
 
@@ -1503,15 +816,10 @@ def plot_curvature_condition_comparison(
 ):
     """Overlay lambda_min(H_R)/lambda_max(H_R) curves from multiple runs.
 
-    Intended for a Gamma noise-prior concentration `a` ablation (Section M /
-    Figure 25 of the paper): pass one curvature_history per `a` value (as
-    returned by sequentially_optimize_samples / evaluate(..., return_plot_
-    data=True)['curvature_history'], already computed via calculate_
-    restricted_curvature_bounds's R_k = T ∩ S^(k) submatrix -- see plot_
-    curvature_bounds), and this plots all of their lambda_min/lambda_max
-    traces together so the effect of `a` on the RSC/RSM curvature condition
-    (Assumption 1 / Lemma 5) is directly visible: larger `a` should make both
-    curves settle further below zero (more concave / more stable).
+    Used for the Gamma noise-prior concentration `a` ablation: pass one
+    curvature_history per `a` value (as returned by
+    evaluate(..., return_plot_data=True)['curvature_history']) to compare
+    the effect of `a` on the restricted curvature condition.
 
     Args:
         curvature_histories: Dict mapping label (e.g. "a=2") -> curvature_history
@@ -1530,21 +838,16 @@ def plot_curvature_condition_comparison(
     plt.rcParams.update({"text.usetex": False})
     plt.rcParams.update({"legend.frameon": False})
 
-    # A full (not paper-column-fraction) base size, plus extra height for a
-    # below-axes legend that can hold up to 2 entries (lambda_min/lambda_max)
-    # per curve: rel_width=1/3 (this plot's original sizing) is only wide
-    # enough for the title/tick labels at this theme's font sizes, and with
-    # no layout engine reserving room for an external legend, that overlaps
-    # the axes/title instead of being placed outside them.
+    # Full-width figure plus extra height for the legend below the axes
+    # (up to 2 entries, lambda_min/lambda_max, per curve)
     n_runs = max(len(curvature_histories), 1)
     legend_rows = -(-2 * n_runs // 4)  # ceil(2*n_runs / 4 columns)
     base_figsize = figsizes.iclr2023(nrows=1, ncols=1, height_to_width_ratio=0.62)['figure.figsize']
     show_rho = _has_rho(curvature_histories)
     show_U = any(ch and _has_upper_bound(ch) for ch in curvature_histories.values())
     if show_rho:
-        # Second row: rho_k per run (third row: U_q per run, if computed).
-        # The lambda legend then goes below the last panel, so reserve its
-        # height there.
+        # Second row: rho_k per run (third row: U_q per run, if computed);
+        # the legend goes below the last panel.
         n_rows = 3 if show_U else 2
         fig, axes = plt.subplots(
             n_rows, 1, sharex=True,
@@ -1630,7 +933,7 @@ def plot_curvature_condition_grid(
     plt.rcParams.update(axes_style("white"))
     plt.rcParams.update(theme)
     plt.rcParams.update({"text.latex.preamble": r"\usepackage{amsmath}\usepackage{times}"})
-    plt.rcParams.update({"text.usetex": True})
+    plt.rcParams.update({"text.usetex": latex_available()})
     plt.rcParams.update({"legend.frameon": False})
 
     # Stable color per gamma_prior_a label, shared across panels.

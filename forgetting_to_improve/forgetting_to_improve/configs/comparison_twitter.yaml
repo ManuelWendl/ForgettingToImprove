@@ -11,9 +11,8 @@ experiment:
   seed: 5
   fixed_kernel: true
   show_plots: true
-  show_hessian: false
   gamma_prior_a: 5        # concentration a
-  gamma_prior_b: 0.2     # target prior MEAN of sigma_w^2, not the rate
+  gamma_prior_b: 0.2     # prior mean of sigma_w^2 (rate = a / mean)
   kernel:
   - type: 'matern'
     nu: 2.5

@@ -29,6 +29,25 @@ MBPO_LOG_FORMAT = [
 ]
 
 
+def save_removal_data(work_dir: str, event_idx: int, env_steps: int, removal_data: dict) -> None:
+    """Save the kept/removed real transitions of one filtering event to
+    <work_dir>/data_removal/<event>_step<env_steps>.npz (one row per sample,
+    `removed` flags which ones were forgotten). Used by
+    plotting/plot_removal_visualization.py."""
+    kept, removed = removal_data["kept"], removal_data["removed"]
+    out_dir = os.path.join(work_dir, "data_removal")
+    os.makedirs(out_dir, exist_ok=True)
+    np.savez_compressed(
+        os.path.join(out_dir, f"{event_idx:04d}_step{env_steps}.npz"),
+        obs=np.concatenate([kept["obs"], removed["obs"]]),
+        act=np.concatenate([kept["act"], removed["act"]]),
+        next_obs=np.concatenate([kept["next_obs"], removed["next_obs"]]),
+        reward=np.concatenate([kept["rewards"], removed["rewards"]]),
+        removed=np.concatenate([np.zeros(len(kept["obs"]), dtype=bool), np.ones(len(removed["obs"]), dtype=bool)]),
+        env_step=env_steps,
+    )
+
+
 class RandomAgent:
     def __init__(self, env: gym.Env):
         self.env = env
@@ -131,6 +150,7 @@ def train(
     work_dir = work_dir or os.getcwd()
     # enable_back_compatible to use pytorch_sac agent
     logger = logging.Logger(cfg, work_dir, enable_back_compatible=True)
+    removal_event = 0  # counts filtering events saved with store_data_removal
     logger.register_group(
         "results",
         MBPO_LOG_FORMAT,
@@ -143,17 +163,15 @@ def train(
     if cfg.seed is not None:
         torch_generator.manual_seed(cfg.seed)
 
-    # -------------- Create initial overrides. dataset --------------
-    # If an analytic reward_fn was supplied (overrides.learned_rewards=false), the
-    # model only predicts state deltas and reward is computed from the predicted
-    # next state instead -- see rollout_model_and_populate_sac_buffer below. This
-    # also keeps reward out of the forgetful_rl filtering entirely (it operates on
-    # whatever the model actually predicts).
+    # -------------- Create dynamics model and datasets --------------
+    # With an analytic reward_fn (overrides.learned_rewards=false), the model
+    # predicts the state only and the reward is computed from the predicted next
+    # state (see rollout_model_and_populate_sac_buffer).
     learn_reward = reward_fn is None
     extra_model_kwargs = {}
     if str(cfg.dynamics_model._target_).endswith("GPModel"):
-        # Only GPModel currently supports learn_reward=False; other dynamics models
-        # (e.g. EnsembleModel) don't accept this kwarg, so don't pass it to them.
+        # GP dynamics models accept learn_reward (False: reward computed from the
+        # predicted next state instead of being a model output).
         extra_model_kwargs["learn_reward"] = learn_reward
     dynamics_model = hydra.utils.instantiate(
         cfg.dynamics_model,
@@ -162,8 +180,8 @@ def train(
         termination_fn=termination_fn,
         **extra_model_kwargs,
     )
-    # Create optimizer only if model has parameters (for neural network models)
-    # GP models handle their own optimization internally
+    # Optimizer for models with parameters at this point; GP models build their
+    # own optimizer in train_model
     model_params = list(dynamics_model.parameters())
     model_optimizer = torch.optim.Adam(
         model_params, 
@@ -259,7 +277,7 @@ def train(
                     "model_updates": model_updates
                 })
                 
-                # --------------- Forgetful BO: Filter Replay Buffer -----------------
+                # --------------- Forgetful RL: Filter Replay Buffer -----------------
                 if cfg.overrides.get("forgetful_rl", False) and len(sac_buffer) > 0:
                     try:
                         # Create target region from SAC buffer (model-generated states)
@@ -312,6 +330,8 @@ def train(
                                 })
                                 # optionally log the actual sample data to wandb for visualization
                                 if store_data_removal and removal_data is not None:
+                                    save_removal_data(work_dir, removal_event, env_steps, removal_data)
+                                    removal_event += 1
                                     # create a wandb table with kept/removed flags
                                     table = wandb.Table(columns=["obs", "action", "next_obs", "reward", "removed"])
                                     kept = removal_data['kept']
@@ -335,11 +355,11 @@ def train(
                                     })
                                 
                                 if debug_mode:
-                                    print(f"\n[Forgetful BO] Filtered buffer: {original_size} -> {filtered_size} "
+                                    print(f"\n[Forgetful RL] Filtered buffer: {original_size} -> {filtered_size} "
                                           f"(removed {filter_stats['removal_ratio']:.1%})")
-                                    print(f"[Forgetful BO] Target region: {tr_stats['target_region_ratio']:.1%} of SAC buffer")
+                                    print(f"[Forgetful RL] Target region: {tr_stats['target_region_ratio']:.1%} of SAC buffer")
                         else:
-                            # For ensemble models, just log target region stats
+                            # Model without a GP: only log target region statistics
                             logger.log_data("results", {
                                 "env_step": env_steps,
                                 "forgetful_rl/target_region_size": tr_stats['target_region_size'],
@@ -348,7 +368,7 @@ def train(
                             })
                             
                     except Exception as e:
-                        print(f"Warning: Forgetful BO filtering failed: {e}")
+                        print(f"Warning: Forgetful RL filtering failed: {e}")
                         import traceback
                         traceback.print_exc()
 

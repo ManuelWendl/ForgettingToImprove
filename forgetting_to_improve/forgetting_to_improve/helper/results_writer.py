@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Dict, Any, List
 from datetime import datetime
@@ -42,16 +43,24 @@ class ResultsWriter:
         return filepath
     
     def write_comparison_results(self, config: Dict[str, Any], all_results: Dict[str, Dict[str, Any]],
-                               comparison_type: str = "method"):
-        """Write comparison results for multiple methods or noise types."""
+                               comparison_type: str = "method", per_seed: Dict[str, Dict[int, Dict]] = None):
+        """Write comparison results for multiple methods or noise types.
+
+        per_seed (statistic experiments): {variant: {seed: metrics}}, also
+        written next to the table as <table name>_per_seed.json.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"comparison_{comparison_type}_{timestamp}.txt"
+        objectives = "_".join(str(o) for o in config.get('objectives', []))
+        prefix = f"comparison_{objectives}" if objectives else "comparison"
+        filename = f"{prefix}_{comparison_type}_{timestamp}.txt"
         filepath = os.path.join(self.output_dir, filename)
         
         with open(filepath, 'w') as f:
             f.write(f"=== {comparison_type.title()} Comparison Results ===\n")
             f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("\n=== Configuration ===\n")
+            if objectives:
+                f.write(f"objective: {objectives}\n")
             f.write(f"A_limits: {config['A_limits']}\n")
             f.write(f"X_limits: {config['X_limits']}\n")
             f.write(f"num_samples: {config['num_samples']}\n")
@@ -142,6 +151,18 @@ class ResultsWriter:
                             f.write(f"{variant:<20}{mean_runtime:>12.4f}{std_runtime:>12.4f}{min_runtime:>12.4f}{max_runtime:>12.4f}\n")
         
         print(f"Comparison results written to: {filepath}")
+
+        if per_seed:
+            json_path = filepath[:-len('.txt')] + '_per_seed.json'
+            with open(json_path, 'w') as f:
+                json.dump({
+                    'objective': objectives,
+                    'num_train_samples': config['num_train_samples'],
+                    'variants': {variant: {str(seed): {k: float(v) for k, v in metrics.items()}
+                                           for seed, metrics in seeds.items()}
+                                 for variant, seeds in per_seed.items()},
+                }, f, indent=1)
+            print(f"Per-seed results written to: {json_path}")
         return filepath
     
     def aggregate_statistical_results(self, results_list: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:

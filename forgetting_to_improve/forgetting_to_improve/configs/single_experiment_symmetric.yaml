@@ -11,8 +11,6 @@ experiment:
   seed: 1
   fixed_kernel: true
   show_plots: true
-  show_hessian: true
-  compare_optimal: false
   calculate_convexity: true
   removal_threshold: 0.01
   map_noise: true

@@ -1,0 +1,23 @@
+bayes_opt:
+  objective: automl_csv:forgetting_to_improve/forgetful_bayesian_optimization/automl_benchmarks/OpenMLRandomBotResultsFinal_mlr.classif.glmnet.csv
+  n_seeds: 10
+  n_iter: 25
+  task_limit: 7
+  acquisition: qUpperConfidenceBound
+  acquisition_params:
+    beta: 2.576
+  init_points: 5
+  save_results: true
+  plot_results: false
+  results_path: automl_allbenchmarks_perbench.txt
+  sample_optimization:
+    algorithm: [none, joint]
+    reset_per_task: false
+    method: sequential 
+    min_samples: 5
+    rolling_window: 150
+  kernel:
+    - type: matern
+      nu: 2.5
+      length_scale: 1.0            
+  alpha: 0.1

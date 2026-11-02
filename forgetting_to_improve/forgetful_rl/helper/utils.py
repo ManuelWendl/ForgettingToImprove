@@ -1,26 +1,8 @@
-from typing import Union, Any
+from typing import Any
 
-import numpy as np
 import gymnasium as gym
 import omegaconf
 
-from ..model.ensemble_model import EnsembleModel
-
-
-def soft_update_params(net, target_net, tau):
-    for param, target_param in zip(net.parameters(), target_net.parameters()):
-        target_param.data.copy_(tau * param.data +
-                                (1 - tau) * target_param.data)
-        
-
-def to_np(t):
-    if t is None:
-        return None
-    elif t.nelement() == 0:
-        return np.array([])
-    else:
-        return t.cpu().detach().numpy()
-    
 
 def truncated_linear(
     min_x: float, max_x: float, min_y: float, max_y: float, x: float
@@ -45,7 +27,7 @@ def truncated_linear(
 
 
 def complete_agent_cfg(
-    env: Union[gym.Env, EnsembleModel], agent_cfg: omegaconf.DictConfig
+    env: gym.Env, agent_cfg: omegaconf.DictConfig
 ):
     """Completes an agent's configuration given information from the environment.
 

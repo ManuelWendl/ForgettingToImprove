@@ -1,19 +1,14 @@
 import torch
 import gpytorch
-from typing import Tuple, Optional, List, Dict
-from itertools import combinations
+from typing import Tuple, List, Dict
 from .uncertainty import (
     calculate_uncertainty_influence,
     solve_map_noise,
-    calculate_aleatoric_hessian,
-    calculate_epistemic_hessian,
 )
 from .curvature_bounds import (
     calculate_restricted_curvature_bounds, compute_J, compute_upper_bound_U,
     check_gradient_dominance,
 )
-from .helper.plot_gp import visualize_hessian, plot_optimal_comparison
-
 
 def _finetune_kernel_mlp(model, x_samples, y_samples):
     """Re-fit the NN (jacobian) kernel's MLP on the current retained set.
@@ -91,8 +86,7 @@ def select_worst_sample(
         x_samples: Training inputs (n_train, d)
         y_samples: Training targets (n_train,)
         x_test: Test inputs (n_test, d)
-        noise_type: Type of uncertainty to consider ('joint', 'epistemic', 'aleatoric',
-            'aleatoric_scaled' = factor * aleatoric, i.e. joint without the epistemic term)
+        noise_type: Type of uncertainty to consider ('joint', 'epistemic', 'aleatoric')
         removal_threshold: Only remove if the removal gain -influence exceeds
             this value (0 recovers the plain "influence < 0" criterion)
         return_criterion: Additionally return the per-sample criterion (n_train,)
@@ -114,12 +108,8 @@ def select_worst_sample(
        total = epistemic_influence
     elif noise_type == 'aleatoric':
         total = aleatoric_influence
-    elif noise_type == 'aleatoric_scaled':
-        # Joint criterion without the epistemic term: same factor on the
-        # aleatoric influence, so joint = epistemic + this.
-        total = aleatoric_influence * factor
     else:
-        raise ValueError("Invalid noise_type. Choose from 'joint', 'epistemic', 'aleatoric' or 'aleatoric_scaled'.")
+        raise ValueError("Invalid noise_type. Choose from 'joint', 'epistemic' or 'aleatoric'.")
     
     min_index = int(total.argmin())
     if -total[min_index] <= removal_threshold:
@@ -137,8 +127,6 @@ def sequentially_optimize_samples(
     x_test: torch.Tensor,
     max_iter: int = 20,
     noise_type: str = 'joint',
-    show_hessian: bool = False,
-    compare_optimal: bool = False,
     calculate_convexity: bool = False,
     A_limits: Tuple = None,
     removal_threshold: float = 0.0,
@@ -155,7 +143,6 @@ def sequentially_optimize_samples(
         x_test: Test inputs (n_test, d)
         max_iter: Maximum iterations
         noise_type: Type of uncertainty to consider
-        show_hessian: Whether to visualize Hessian (only for 1D)
         calculate_convexity: Whether to compute curvature bound m
         A_limits: Region limits for curvature bound calculation (required if calculate_convexity=True)
         removal_threshold: Minimum removal gain -influence required to remove a sample
@@ -192,25 +179,15 @@ def sequentially_optimize_samples(
                          'U': [], 'J_bar': [], 'n_samples_q': [], 'grad_inf': [],
                          'assumption_lhs': [], 'assumption_rhs': [], 'assumption_met': []}
 
-    # Store original full dataset for optimal comparison
-    if compare_optimal:
-        original_x = x_samples.clone()
-        original_y = y_samples.clone()
-        fti_test_uncertainty = []
-        optimal_test_uncertainty = []
-
     # Compute initial curvature bounds if requested
     if calculate_convexity:
         if A_limits is None:
             raise ValueError("A_limits must be provided when calculate_convexity=True")
 
-    # Curvature bounds need the *full* eventual removal set T (R_k = T ∩ S^(k)
-    # at every step k, see Section M / Lemma 5), which is only known once the
-    # greedy removal loop below has run to completion. So the loop below only
-    # records *which original sample* is removed at each step (removal_order,
-    # via orig_idx tracking each row's position in the initial x_samples/
-    # y_samples); the actual H_R(S^(k)) submatrices are computed afterwards
-    # in a second, retrospective pass that replays this exact removal order.
+    # The curvature bounds need the full removal set T (R_k = T ∩ S^(k) at every
+    # step k), which is only known after the greedy loop below. The loop records
+    # which original sample is removed at each step (removal_order); the
+    # submatrices H_R(S^(k)) are computed afterwards by replaying this order.
     x_samples_0 = x_samples.clone()
     y_samples_0 = y_samples.clone()
     orig_idx = torch.arange(len(x_samples), device=x_samples.device)
@@ -228,12 +205,6 @@ def sequentially_optimize_samples(
             removal_threshold=removal_threshold, return_criterion=True,
             use_prior_a=map_noise
         )
-
-        if show_hessian and x_samples.shape[1] == 1:
-            # Only show hessian for 1D case
-            H = calculate_aleatoric_hessian(y_samples, model, x_samples)
-            visualize_hessian(H, aleatoric, epistemic, index_to_remove,
-                              title=f"Hessian Iteration {iteration + 1}_{noise_type}")
 
         if index_to_remove is None:
             break
@@ -254,47 +225,6 @@ def sequentially_optimize_samples(
             print("Cannot remove more samples (would leave less than 2 samples)")
             break
 
-        if compare_optimal:
-            # Store FTI uncertainty after this removal (before refitting)
-            # We need to refit the model to the current subset first
-            model.set_train_data(x_samples, y_samples, strict=False)
-            model.eval()
-            likelihood.eval()
-            
-            with torch.no_grad():
-                sigma_x_test = model(x_test).variance.mean().item()
-            fti_test_uncertainty.append(sigma_x_test)
-            
-            # Find optimal subset of current size by exhaustive search
-            n_current = len(x_samples)
-            n_total = len(original_x)
-            
-            print(f"\n=== Iteration {iteration + 1}: Finding optimal subset of size {n_current} ===")
-            
-            best_uncertainty = float('inf')
-            
-            # Try all possible subsets of size n_current
-            n_combinations = 0
-            for subset_indices in combinations(range(n_total), n_current):
-                n_combinations += 1
-                subset_indices = list(subset_indices)
-                subset_x = original_x[subset_indices]
-                subset_y = original_y[subset_indices]
-                
-                # Evaluate model with this subset (use current hyperparameters, don't refit)
-                model.set_train_data(subset_x, subset_y, strict=False)
-                model.eval()
-                likelihood.eval()
-                
-                with torch.no_grad():
-                    subset_uncertainty = model(x_test).variance.mean().item()
-                
-                if subset_uncertainty < best_uncertainty:
-                    best_uncertainty = subset_uncertainty
-                        
-            
-            optimal_test_uncertainty.append(best_uncertainty)
-            
         # For the NN (jacobian) kernel: fine-tune the MLP on the reduced dataset
         # for a few epochs so the kernel adapts after this removal (no-op otherwise).
         _finetune_kernel_mlp(model, x_samples, y_samples)
@@ -304,16 +234,11 @@ def sequentially_optimize_samples(
         model.train()
         likelihood.train()
 
-    # Retrospective Pass 2: now that the full removal order T is known, replay
-    # it from the original dataset and, at each step k, compute curvature
-    # restricted to R_k = T ∩ S^(k) -- this step's removal *and* every later
-    # one still present -- rather than only the diagonal entry of the single
-    # point picked at step k (see calculate_restricted_curvature_bounds).
-    # The greedy removal decisions themselves are unaffected: they were
-    # already made above using the cheap first-order influence measures.
-    # g_k for rho_k is dJ/dh_i at the MAP-II noise (same function as J and
-    # H_R), not the removal criterion, which is evaluated at the model's
-    # likelihood.noise; the latter is kept in 'criterion' for comparison.
+    # Second pass: replay the removal order T from the original data and, at
+    # each step k, compute the curvature restricted to R_k = T ∩ S^(k) (see
+    # calculate_restricted_curvature_bounds). The removal decisions are not
+    # affected. g_k for rho_k is dJ/dh_i at the MAP-II noise; the removal
+    # criterion (at the model's noise) is stored in 'criterion'.
     if calculate_convexity and removal_order:
         x_r = x_samples_0
         y_r = y_samples_0
@@ -408,28 +333,6 @@ def sequentially_optimize_samples(
     if map_noise:
         model.likelihood.noise = original_noise
 
-    # Summary of comparison
-    if compare_optimal:
-        print("\n=== Final Comparison: FTI vs Optimal Subset Selection ===")
-        print(f"{'Subset Size':<15} {'FTI Uncertainty':<20} {'Optimal Uncertainty':<20} {'Difference':<15}")
-        print("-" * 70)
-        
-        # Build list of subset sizes (decreasing)
-        n_samples_list = []
-        for i in range(len(fti_test_uncertainty)):
-            subset_size = len(original_x) - i - 1
-            n_samples_list.append(subset_size)
-            diff = fti_test_uncertainty[i] - optimal_test_uncertainty[i]
-            print(f"{subset_size:<15} {fti_test_uncertainty[i]:<20.6f} {optimal_test_uncertainty[i]:<20.6f} {diff:<15.6f}")
-        
-        # Create comparison plot
-        plot_optimal_comparison(
-            fti_uncertainty=fti_test_uncertainty,
-            optimal_uncertainty=optimal_test_uncertainty,
-            n_samples_list=n_samples_list,
-            title="FTI_vs_Optimal_Subset_Selection"
-        )
-    
     return x_samples, y_samples, deleted_x_samples, curvature_history
 
 
@@ -464,10 +367,8 @@ def batch_optimize_samples(
         total = epistemic
     elif noise_type == 'aleatoric':
         total = aleatoric
-    elif noise_type == 'aleatoric_scaled':
-        total = aleatoric * factor
     else:
-        raise ValueError("Invalid noise_type. Choose from 'joint', 'epistemic', 'aleatoric' or 'aleatoric_scaled'.")
+        raise ValueError("Invalid noise_type. Choose from 'joint', 'epistemic' or 'aleatoric'.")
     
     negative_indices = torch.where(total < 0)[0]
     if len(negative_indices) > 0:

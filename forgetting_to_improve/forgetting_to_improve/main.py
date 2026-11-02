@@ -1,13 +1,13 @@
 import argparse
 import sys
 from .evaluate import evaluate
-from .objectives import sin_symmetric_lengthscale_increase
 from .helper.config_loader import ConfigLoader
 from .helper.results_writer import ResultsWriter
 from .helper.plot_gp import (
     plot_predictions_comparison,
     plot_calibration_comparison,
     plot_curvature_condition_comparison,
+    latex_available,
 )
 
 
@@ -26,12 +26,10 @@ def run_single_experiment(config, method, objective_name, objective_func, object
         num_A_samples=config['num_A_samples'],
         seed=seed,
         fixed_kernel=config['fixed_kernel'],
-        show_plots=config['show_plots'] and not return_plot_data,  # Disable plots when collecting data for comparison
-        show_hessian=config['show_hessian'],
-        compare_optimal=config.get('compare_optimal', False),
         calculate_convexity=config.get('calculate_convexity', False),
         removal_threshold=config.get('removal_threshold', 0.0),
         map_noise=config.get('map_noise', False),
+        noise_init=config.get('noise_init', 'config'),
         objective_type=objective_type,
         feature_subset=config.get('feature_subset', None),
         kernel_config=config.get('kernel_config', None),
@@ -62,12 +60,10 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
 
     Args:
         config_path: Path to the experiment YAML config.
-        collect_curvature_histories: When True, also return the per-
-            objective gamma_prior_a-sweep curvature-history overlays (used
-            to combine several curvature-ablation configs into one figure,
-            see run_curvature_ablations.py) instead of just all_results.
-            Purely additive: existing callers (default False) see no change
-            in behavior or return value.
+        collect_curvature_histories: If True, also return the curvature
+            histories of a gamma_prior_a sweep per objective (used by
+            run_curvature_ablations.py to combine several configs into one
+            figure).
     """
     config_loader = ConfigLoader()
     config = config_loader.load_config(config_path)
@@ -79,11 +75,8 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
     print(f"Noises: {config['noises']}")
     print(f"Seeds: {len(config['seeds'])} seed(s)")
 
-    # Optional Gamma noise-prior (a, b) sweep for the curvature analysis
-    # (Section M / Figure 25 of the paper). Absent from the config, this is
-    # [None], which run_single_experiment/evaluate() treat as "use the
-    # self-calibrating default prior" -- existing single-value configs are
-    # unaffected.
+    # Optional Gamma noise-prior sweep over the concentration a (curvature
+    # ablation); [None] uses the default prior
     gamma_prior_a_values = config.get('gamma_prior_a_values', [None])
     gamma_prior_b_values = config.get('gamma_prior_b_values', [None])
     if len(gamma_prior_a_values) > 1:
@@ -104,6 +97,7 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
 
     # Store all results for comparison
     all_results = {}
+    per_seed_results = {}  # statistic experiments: variant -> seed -> metrics (+ n_opt)
     comparison_plot_data = {}  # For single experiment comparisons
     gamma_prior_curvature_histories = {}  # For single experiment a-sweep curvature overlay
     collected_curvature_histories = {}  # objective_name -> gamma_prior_curvature_histories
@@ -117,10 +111,6 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
                 # Skip invalid combinations
                 if (method == 'targetSampling' or method == 'none' or method == 'relevance_pursuit' or method == 'warped_gp' or method == 'heteroscedastic_gp') and noise != 'joint':
                     # Skip this combination (these methods don't use the noise parameter)
-                    continue
-
-                # For per-kernel methods, only use 'joint' noise (noise parameter is not used in per-kernel evaluation)
-                if method in ['sequentialPerKernel', 'batchPerKernel'] and noise != 'joint':
                     continue
 
                 # Create variant identifier
@@ -176,6 +166,9 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
                         seed_results.append(results)
                         if num_samples_opt == 0:
                             num_zero_samples += 1
+                        if is_statistical:
+                            # n_opt: number of training samples kept
+                            per_seed_results.setdefault(variant_key_a, {})[seed] = {**results, 'n_opt': num_samples_opt}
 
                     # Aggregate results if statistical experiment
                     if is_statistical:
@@ -221,12 +214,7 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
         # Generate comparison plot
         seed = config['seeds'][0]
         objective_name = config['objectives'][0]
-        # Real LaTeX rendering for every single-comparison plot (axis labels,
-        # title, legend) -- originally gated on the jacobian/NN kernel only,
-        # but a real LaTeX install has proven reliably available wherever
-        # this runs, so there's no reason to fall back to mathtext for
-        # other kernels (e.g. the periodic-kernel comparisons).
-        usetex = True
+        usetex = latex_available()
         plot_predictions_comparison(
             objective_func,
             x,
@@ -258,47 +246,23 @@ def run_experiments_from_config(config_path, collect_curvature_histories=False):
         else:
             comparison_type = "statistical"
         
-        results_writer.write_comparison_results(config, all_results, comparison_type)
+        results_writer.write_comparison_results(config, all_results, comparison_type,
+                                                per_seed=per_seed_results if is_statistical else None)
 
     if collect_curvature_histories:
         return all_results, collected_curvature_histories
     return all_results
 
-def main_legacy():
-    """Legacy main function for backward compatibility."""
-    # Example usage of the evaluate function
-    results = evaluate(
-        method='none',
-        objective_func=sin_symmetric_lengthscale_increase,
-        noise='joint',
-        A_limits=(-3, 3),
-        X_limits=(-10, 10),
-        num_samples=1000,
-        num_train_samples=20,
-        num_A_samples=50,
-        seed=0,
-        fixed_kernel=True,
-        show_plots=True,
-        show_hessian=False
-    )
-    print("Evaluation Results:", results)
-
 def main():
-    """Main function that can be called with or without config file."""
+    """Run the experiments of a YAML config file (-c)."""
     parser = argparse.ArgumentParser(description='Run GP optimization experiments')
-    parser.add_argument('--config', '-c', type=str, help='Path to configuration YAML file')
-    
+    parser.add_argument('--config', '-c', type=str, required=True, help='Path to configuration YAML file')
     args = parser.parse_args()
-    
-    if args.config:
-        try:
-            return run_experiments_from_config(args.config)
-        except Exception as e:
-            print(f"Error running experiments from config: {e}")
-            sys.exit(1)
-    else:
-        print("No config file provided, running legacy example...")
-        return main_legacy()
+    try:
+        return run_experiments_from_config(args.config)
+    except Exception as e:
+        print(f"Error running experiments from config: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
