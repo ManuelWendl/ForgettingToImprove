@@ -1,12 +1,11 @@
 # Forgetting to Improve
 
-Code for the paper **Forgetting to Improve** <!-- TODO: full title, authors, venue, arXiv link -->.
+Code for the paper **Forgetting to Improve: Principled Data Removal in Active Learning**:
 
-Forgetting to Improve (F2I) removes training samples from a Gaussian process whenever
-removing them *reduces* the predictive uncertainty on a target region. The removal
-criterion is the gradient of the target-region uncertainty with respect to a soft
-removal of each sample, split into an epistemic part (posterior variance) and an
-aleatoric part (the MAP-II noise estimate). This repository contains:
+The uncertainty of a statistical model is most commonly factorized into an aleatoric and an epistemic part. This factorization changes how predictions are interpreted in downstream decision tasks. Importantly, except for the idealistic scenario with no model mismatch, the quantification is a characteristic of the model and not the data generating process. In this paper, we propose Forgetting to Improve a method that reduces this discrepancy by incorporating the task into the modeling framework. Our key insight is to acknowledge that in scenarios of model mismatch, data can have a detrimental effect on the modeling for a specific task. Based on this insight, we propose an influence function for Gaussian process models that allows for principled removal of detrimental data samples. We showcase the flexibility of this approach by demonstrating significant improvements across a range of tasks, including Bayesian optimization, model-based reinforcement learning, and transductive learning.
+
+
+This repository contains:
 
 | Package | What it does |
 |---|---|
@@ -182,32 +181,6 @@ python -m forgetting_to_improve.forgetting_to_improve.main \
 bash scripts/run_bo.sh nn                   # *_jacobian(_noisy).yaml
 ```
 
-## Additional experiments (not in the paper)
-
-### AutoML hyperparameter benchmark (BO)
-
-BO over the hyperparameters of glmnet on OpenML classification tasks, using the
-precomputed results table
-`forgetful_bayesian_optimization/automl_benchmarks/OpenMLRandomBotResultsFinal_mlr.classif.glmnet.csv`
-(an evaluation returns the accuracy of the nearest tabulated configuration).
-The tasks (`data_id`) are run one after another in a single BO run, `n_iter`
-iterations each:
-
-```bash
-python -m forgetting_to_improve.forgetful_bayesian_optimization.main \
-    -c forgetting_to_improve/forgetful_bayesian_optimization/configs/automl_csv_example.yaml
-```
-
-### Forgetful RL: cartpole swingup (DeepMind Control)
-
-Needs `pip install dm_control==1.0.37` (includes MuJoCo). Dense (DMC) reward and
-a sparse variant, both with a Matern-kernel GP:
-
-```bash
-python -m forgetting_to_improve.forgetful_rl.main overrides=mbpo_cartpole_swingup dynamics_model=gp_model_matern seed=0
-python -m forgetting_to_improve.forgetful_rl.main overrides=mbpo_cartpole_swingup_sparse dynamics_model=gp_model_matern seed=0
-```
-
 ## Repository structure
 
 ```
@@ -247,13 +220,14 @@ tests/                                  # derivative checks for the curvature an
 
 ## Citation
 
-<!-- TODO: replace with the final BibTeX entry -->
 ```bibtex
-@inproceedings{forgetting_to_improve,
-  title     = {Forgetting to Improve},
-  author    = {TODO},
-  booktitle = {TODO},
-  year      = {2026}
+@inproceedings{
+wendl2026forgetting,
+title={Forgetting to Improve: Principled Data Removal in Active Learning},
+author={Manuel Wendl, Erik Englesson, Andreas Krause, Carl Henrik Ek},
+booktitle={The Fortieth Annual Conference on Neural Information Processing Systems},
+year={2026},
+url={https://openreview.net/forum?id=wF1w6w0jmM}
 }
 ```
 
